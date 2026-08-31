@@ -1,0 +1,61 @@
+.enable-banking-prerequisites {
+  margin: 20px 24px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: #f7f4ec;
+}
+
+.enable-banking-prerequisites > p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.enable-banking-prerequisites details { margin-top: 9px; }
+.enable-banking-prerequisites summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  color: var(--rust);
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  list-style: none;
+}
+.enable-banking-prerequisites summary::-webkit-details-marker { display: none; }
+.enable-banking-prerequisites summary svg { transition: transform 0.18s; }
+.enable-banking-prerequisites details[open] summary svg { transform: rotate(180deg); }
+.enable-banking-prerequisites ol {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.enable-banking-prerequisites li + li { margin-top: 5px; }
+
+.bank-link-panel .bank-connect-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  padding: 24px;
+}
+.bank-link-panel .bank-connect-form > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.bank-link-panel .bank-linked { padding: 24px; }
+.bank-link-panel .integration-message { padding: 0 24px 22px; }
+.bank-link-panel .field > span { font-size: 13px; font-weight: 650; }
+.bank-link-panel select { width: 100%; min-height: 44px; }
+
+@media (max-width: 760px) {
+  .enable-banking-prerequisites { margin: 16px 16px 0; }
+  .bank-link-panel .bank-connect-form { grid-template-columns: 1fr; padding: 18px 16px; }
+  .bank-link-panel .bank-connect-form > button { grid-column: auto; width: 100%; }
+  .bank-link-panel .bank-linked { padding: 18px 16px; }
+  .bank-link-panel .integration-message { padding: 0 16px 18px; }
+}

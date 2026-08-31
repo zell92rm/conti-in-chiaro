@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `type` text DEFAULT 'personale' NOT NULL;

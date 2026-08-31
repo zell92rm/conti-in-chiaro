@@ -1,0 +1,7 @@
+# This file is copied with public assets by framework builds.
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.pem
+
