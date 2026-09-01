@@ -19,6 +19,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TransactionDescription } from "@/components/transaction-description";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { accountCycleMonth, accountPeriodBounds } from "@/lib/account-period";
 import {
   Dialog,
   DialogContent,
@@ -61,15 +64,22 @@ type Tx = {
   amount: number;
   category: string;
   source: string;
+  externalTransactionId?: string | null;
   openBankingStatus?: "BOOK" | "PDNG" | null;
   spreadAcrossWeeks: boolean;
   fixedExpenseId?: number | null;
 };
 type Category = { id: number; name: string; color: string; keywords?: string[] };
-type FixedExpense = { id:number; accountId:number; name:string; category:string|null; amount:number; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
+type FixedExpense = { id:number; accountId:number; name:string; category:string|null; keywords:string[]; amount:number; active:boolean; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
 const eur = new Intl.NumberFormat("it-IT", {
   style: "currency",
   currency: "EUR",
+});
+const compactEur = new Intl.NumberFormat("it-IT", {
+  style: "currency",
+  currency: "EUR",
+  notation: "compact",
+  maximumFractionDigits: 1,
 });
 const monthName = new Intl.DateTimeFormat("it-IT", {
   month: "long",
@@ -77,6 +87,7 @@ const monthName = new Intl.DateTimeFormat("it-IT", {
 });
 
 export default function ExpenseApp({ displayName }: { displayName: string }) {
+  const isMobile = useIsMobile();
   const [accounts, setAccounts] = useState<Account[]>([]),
     [txs, setTxs] = useState<Tx[]>([]),
     [categories, setCategories] = useState<Category[]>([]),
@@ -93,7 +104,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
   const [deletingTransactionIds, setDeletingTransactionIds] = useState<Set<number>>(new Set());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [bankLinks, setBankLinks] = useState<Record<number, string>>({}), [syncingBank, setSyncingBank] = useState(false);
-  const [bankImport, setBankImport] = useState<null | { accountId: number; rows: Array<{ date: string; description: string; amount: number; category: string }>; balance: { amount: number; currency: string } | null }>(null);
+  const [bankImport, setBankImport] = useState<null | { accountId: number; rows: Array<{ date: string; description: string; details?: string; amount: number; category: string; externalTransactionId?: string }>; balance: { amount: number; currency: string } | null }>(null);
   const [dashboardTab, setDashboardTab] = useState<"movimenti">("movimenti");
   const hasLoadedData = useRef(false);
   const configuredHomeAccount = useRef("all");
@@ -156,13 +167,19 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     [accounts, accountFilter],
   );
   const selectedAccount = accountFilter === "all" ? null : viewAccounts[0] || null;
-  const latestDashboardMonth = new Date().toISOString().slice(0, 7);
+  const today = new Date().toISOString().slice(0, 10);
+  const latestDashboardMonth = selectedAccount
+    ? accountCycleMonth(today, selectedAccount.type)
+    : today.slice(0, 7);
   const availableExpenseMonths = useMemo(() => {
     if (selectedAccount?.type !== "spese_mese") return [];
     return Array.from(new Set(viewTxs.map((transaction) => movementCycleMonth(transaction.date, selectedAccount))))
       .filter((availableMonth) => availableMonth <= latestDashboardMonth)
       .sort();
   }, [viewTxs, selectedAccount, latestDashboardMonth]);
+  useEffect(() => {
+    setMonth(latestDashboardMonth);
+  }, [selectedAccount?.id, selectedAccount?.type, latestDashboardMonth]);
   useEffect(() => {
     if (month > latestDashboardMonth) setMonth(latestDashboardMonth);
   }, [month, latestDashboardMonth]);
@@ -180,7 +197,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     if (!query) return current;
     return current.filter((transaction) => {
       const accountName = accounts.find((account) => account.id === transaction.accountId)?.name || "";
-      return [transaction.description, transaction.category, accountName, transaction.date, String(Math.abs(transaction.amount))]
+      return [transaction.description, transaction.category, accountName, transaction.date, ...transactionAmountSearchValues(transaction.amount)]
         .some((value) => compactSearchText(value).indexOf(query) !== -1);
     });
   }, [current, transactionSearch, accounts]);
@@ -194,7 +211,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
         category: compactSearchText(transaction.category),
         account: compactSearchText(accountName),
         date: compactSearchText(transaction.date),
-        amount: compactSearchText(String(Math.abs(transaction.amount))),
+        amount: transactionAmountSearchValues(transaction.amount).map(compactSearchText).join(" "),
       };
       const matchingFields = Object.entries(searchableFields).filter(([, value]) => value.includes(normalizedQuery)).map(([field]) => field);
       return {
@@ -235,10 +252,6 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     .filter((t) => t.amount > 0)
     .reduce((s, t) => s + t.amount, 0);
   const balance = viewTxs.reduce((s, t) => s + t.amount, 0);
-  const reservedFixedExpenses = viewAccounts.reduce((sum, account) =>
-    account.type === "personale" || account.type === "spese_mese"
-      ? sum + unpaidFixedTotal(fixedExpenses, account.id, month)
-      : sum, 0);
   const monthly = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
     d.setMonth(d.getMonth() - 5 + i);
@@ -272,7 +285,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
   };
   const changeTransactionCategory = async (transaction: Tx, category: string) => {
     if (category === transaction.category || savingCategoryIds.has(transaction.id)) return;
-    const affected = (item: Tx) => item.id === transaction.id || (transaction.amount < 0 && item.amount < 0 && item.description === transaction.description);
+    const affected = (item: Tx) => item.id === transaction.id || (transaction.amount < 0 && item.amount < 0 && sameTransactionDescription(item, transaction));
     const previousCategories = new Map(txs.filter(affected).map((item) => [item.id, item.category]));
     setSavingCategoryIds((current) => new Set(current).add(transaction.id));
     setTxs((current) => current.map((item) => affected(item) ? { ...item, category } : item));
@@ -413,12 +426,13 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
               <label><span>{monthName.format(new Date(month + "-01T12:00:00"))}</span><small>{formatPeriod(period)}</small>{selectedAccount.type === "spese_mese" ? <select aria-label="Scegli periodo" value={month} onChange={(event) => setMonth(event.target.value)}>{availableExpenseMonths.map((availableMonth) => <option value={availableMonth} key={availableMonth}>{monthName.format(new Date(`${availableMonth}-01T12:00:00`))}</option>)}</select> : <input aria-label="Scegli mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>}</label>
               <button type="button" onClick={() => moveMonth(1)} disabled={selectedAccount.type === "spese_mese" ? expenseMonthIndex < 0 || expenseMonthIndex >= availableExpenseMonths.length - 1 : month >= latestDashboardMonth} aria-label="Mese successivo"><ChevronRight size={17}/></button>
             </div> : <input aria-label="Mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>} 
-            {selectedAccount && bankLinks[selectedAccount.id] && <Button variant="outline" disabled={syncingBank} onClick={syncBank} title={`Sincronizza da ${bankLinks[selectedAccount.id]}`}><RefreshCw size={16}/>{syncingBank ? "Sincronizzazione…" : "Sincronizza con Enable Banking"}</Button>}
+            {selectedAccount && <a className="header-account-settings" href={`/configurazione/conti/${selectedAccount.id}`}><Settings size={16}/> Impostazioni conto</a>}
+            {selectedAccount && bankLinks[selectedAccount.id] && <Button className="mobile-primary-action bank-sync-action" variant="outline" disabled={syncingBank} onClick={syncBank} title={`Sincronizza da ${bankLinks[selectedAccount.id]}`}><RefreshCw size={17}/><span>{syncingBank ? "Sincronizzazione…" : "Sincronizza con Enable Banking"}</span></Button>}
             <Dialog open={importOpen} onOpenChange={(open) => { setImportOpen(open); if (!open) setBankImport(null); }}>
-              <DialogTrigger render={<Button variant="outline" />}>
-                <Upload size={16} /> Importa estratto
+              <DialogTrigger className="mobile-quick-action import-action" onClick={() => { setMobileMenuOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} render={<Button variant="outline" />}>
+                <Upload size={17} /> <span>Importa estratto</span>
               </DialogTrigger>
-              <DialogContent className="import-dialog">
+              <DialogContent className="import-dialog" onOpenAutoFocus={(event) => { event.preventDefault(); const dialog = event.currentTarget; requestAnimationFrame(() => dialog.focus()); }}>
                 <ImportForm
                   key={`${accountFilter}-${importOpen}-${bankImport ? "bank" : "file"}`}
                   accounts={accounts}
@@ -442,8 +456,8 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
               </DialogContent>
             </Dialog>
             <Dialog open={txOpen} onOpenChange={setTxOpen}>
-              <DialogTrigger render={<Button />}>
-                <Plus size={16} /> Movimento
+              <DialogTrigger className="mobile-quick-action movement-action" render={<Button variant="outline" />}>
+                <Plus size={18} /> <span>Movimento</span>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
@@ -492,11 +506,6 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                     ? `su ${accounts.length} ${accounts.length === 1 ? "conto" : "conti"}`
                     : viewAccounts[0]?.name}
                 </small>
-              </article>
-              <article className="metric">
-                <span>Effettivamente spendibile</span>
-                <strong>{eur.format(balance - reservedFixedExpenses)}</strong>
-                <small>{eur.format(reservedFixedExpenses)} riservati per spese fisse</small>
               </article>
               <article className="metric">
                 <span>
@@ -581,51 +590,52 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
               </TabsList>
               <TabsContent value="movimenti" id="movimenti">
                 <article className="panel table-panel" ref={transactionsPanelRef}>
-                  <div className="transaction-search"><Search size={16}/><input type="search" value={transactionSearch} onChange={(event) => setTransactionSearch(event.target.value)} placeholder="Cerca per descrizione, categoria, conto o importo…" aria-label="Cerca nei movimenti del periodo"/>{transactionSearch && <button type="button" onClick={() => setTransactionSearch("")} aria-label="Cancella ricerca"><X size={15}/></button>}</div>
+                  <div className="transaction-search"><Search size={16}/><input type="search" value={transactionSearch} onChange={(event) => setTransactionSearch(event.target.value)} placeholder={isMobile ? "Cerca movimenti…" : "Cerca per descrizione, categoria, conto o importo…"} aria-label="Cerca nei movimenti del periodo"/>{transactionSearch && <button type="button" onClick={() => setTransactionSearch("")} aria-label="Cancella ricerca"><X size={15}/></button>}</div>
                   {visibleTransactions.length ? (
                     <Table key={`${compactSearchText(transactionSearch)}-${visibleTransactions.length}`}>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Data</TableHead>
-                          <TableHead>Descrizione</TableHead>
+                          <TableHead className="transaction-date-cell">Data</TableHead>
+                          <TableHead className="transaction-description-cell">Descrizione</TableHead>
                           {accountFilter === "all" && <TableHead>Conto</TableHead>}
-                          <TableHead>Categoria</TableHead>
-                          <TableHead className="right">Importo</TableHead>
+                          <TableHead className="transaction-category-cell">Categoria</TableHead>
+                          <TableHead className="right transaction-amount-cell">Importo</TableHead>
                           <TableHead>Azioni</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {visibleTransactions.map((t) => (
                           <TableRow key={t.id}>
-                            <TableCell data-label="Data">
-                              {new Date(
+                            <TableCell data-label="Data" className="transaction-date-cell">
+                              <span className="desktop-transaction-date">{new Date(
                                 t.date + "T12:00:00",
-                              ).toLocaleDateString("it-IT")}
+                              ).toLocaleDateString("it-IT")}</span>
+                              <span className="mobile-transaction-date">{new Date(t.date + "T12:00:00").toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" })}</span>
                             </TableCell>
-                            <TableCell data-label="Descrizione">
-                              <b title={t.details || undefined}>{t.description}</b>
-                              {t.source === "import" && (
-                                <small className="tag">Importato</small>
+                            <TableCell data-label="Descrizione" className="transaction-description-cell">
+                              <TransactionDescription description={t.description} details={t.details} compactOnMobile/>
+                              {(t.source === "import" || t.source === "enable_banking" || t.fixedExpenseId || (t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese")) && (
+                                <div className="transaction-meta">
+                                  {t.source === "import" && <small className="tag">Importato</small>}
+                                  {t.source === "enable_banking" && <small className="tag">Enable Banking</small>}
+                                  {t.fixedExpenseId && (
+                                    <small className="tag fixed-expense-tag" title={fixedExpenses.find((expense) => expense.id === t.fixedExpenseId)?.name || "Spesa fissa"}>Spesa fissa</small>
+                                  )}
+                                  {t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese" && <label className="spread-expense-toggle"><input type="checkbox" checked={t.spreadAcrossWeeks === true} disabled={savingSpreadIds.has(t.id)} onChange={(event) => toggleTransactionSpread(t, event.target.checked)}/><span>Spalma la spesa</span></label>}
+                                </div>
                               )}
-                              {t.source === "enable_banking" && (
-                                <small className="tag">Enable Banking</small>
-                              )}
-                              {t.fixedExpenseId && (
-                                <small className="tag fixed-expense-tag" title={fixedExpenses.find((expense) => expense.id === t.fixedExpenseId)?.name || "Spesa fissa"}>Spesa fissa</small>
-                              )}
-                              {t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese" && <label className="spread-expense-toggle"><input type="checkbox" checked={t.spreadAcrossWeeks === true} disabled={savingSpreadIds.has(t.id)} onChange={(event) => toggleTransactionSpread(t, event.target.checked)}/><span>Spalma la spesa</span></label>}
                             </TableCell>
                             {accountFilter === "all" && <TableCell data-label="Conto">
                               {accounts.find((a) => a.id === t.accountId)?.name}
                             </TableCell>}
-                            <TableCell data-label="Categoria">
+                            <TableCell data-label="Categoria" className="transaction-category-cell">
                               <select className="inline-category-select" value={t.category} disabled={savingCategoryIds.has(t.id)} onChange={(event) => changeTransactionCategory(t, event.target.value)} aria-label={`Categoria di ${t.description}`}>
                                 {categories.map((category) => <option value={category.name} key={category.id}>{category.name}</option>)}
                               </select>
                             </TableCell>
                             <TableCell
                               data-label="Importo"
-                              className={`right amount ${t.amount >= 0 ? "positive" : ""}`}
+                              className={`right amount transaction-amount-cell ${t.amount >= 0 ? "positive" : ""}`}
                             >
                               {t.amount >= 0 ? "+" : ""}
                               {eur.format(t.amount)}
@@ -662,6 +672,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                 accounts={accounts}
                 categories={categories}
                 fixedExpenses={fixedExpenses}
+                history={txs}
                 post={post}
                 done={async () => {
                   setEditingTx(null);
@@ -700,6 +711,7 @@ function TxForm({
       accountId: initial ? String(initial.accountId) : defaultAccountId,
       date: initial?.date || new Date().toISOString().slice(0, 10),
       description: initial?.description || "",
+      details: initial?.details || "",
       amount: initial ? String(initial.amount) : "",
       category: initial?.category || "Altro",
       fixedExpenseId: initial?.fixedExpenseId ? String(initial.fixedExpenseId) : "",
@@ -707,17 +719,17 @@ function TxForm({
     [error, setError] = useState("");
   const fixedExpenseOptions = initial && Number(f.amount) < 0
     ? fixedExpenses.filter((expense: FixedExpense) => {
-        const month = f.date.slice(0, 7);
+        const month = accountCycleMonth(f.date, accounts.find((account: Account) => String(account.id) === f.accountId)?.type || "personale");
         const isCurrent = String(expense.id) === String(f.fixedExpenseId);
         const paidByAnotherMovement = expense.payments.some((payment) => payment.month === month && payment.transactionId !== initial.id);
-        return expense.accountId === Number(f.accountId) && (isCurrent || (!paidByAnotherMovement && !expense.skippedMonths?.includes(month)));
+        return expense.accountId === Number(f.accountId) && (isCurrent || (expense.active !== false && !paidByAnotherMovement && !expense.skippedMonths?.includes(month)));
       })
     : [];
   return (
     <form
       onSubmit={async (e) => {
         e.preventDefault();
-        const fixedMatch = !initial ? matchingFixedExpense(fixedExpenses, Number(f.accountId), f.date, f.description, Number(f.amount)) : undefined;
+        const fixedMatch = !initial ? matchingFixedExpense(fixedExpenses, Number(f.accountId), accounts.find((account: Account) => String(account.id) === f.accountId)?.type || "personale", f.date, transactionText(f), Number(f.amount)) : undefined;
         const fixedExpenseId = initial
           ? (f.fixedExpenseId ? Number(f.fixedExpenseId) : undefined)
           : fixedMatch && confirm(`Questo movimento sembra corrispondere alla spesa fissa “${fixedMatch.name}” da ${eur.format(fixedMatch.amount)}. Confermi?`)
@@ -734,6 +746,12 @@ function TxForm({
         if (r.error) {
           setError(r.error);
           return;
+        }
+        if (r.duplicate === true && !initial) {
+          const confirmed = confirm("Esiste un movimento simile nello stesso giorno e con lo stesso importo. Vuoi inserirlo comunque?");
+          if (!confirmed) return;
+          const forced = await post({ action: "transaction", ...f, accountId: Number(f.accountId), amount: Number(f.amount), fixedExpenseId, force: true });
+          if (forced.error) { setError(forced.error); return; }
         }
         done();
       }}
@@ -776,10 +794,24 @@ function TxForm({
         onChange={(e: any) => {
           const description = e.target.value;
           const amount = Number(f.amount);
-          const automatic = refundCategory(description, amount, history) || (amount > 0
+          const text = transactionText({ description, details: f.details });
+          const automatic = refundCategory(text, amount, history) || (amount > 0
             ? incomeCategoryForAccount(f.accountId, accounts)
-            : keywordCategory(description, localCategories) || learnedCategory(description, amount, history));
+            : keywordCategory(text, localCategories) || learnedCategory(text, amount, history));
           setF({ ...f, description, category: automatic || f.category });
+        }}
+      />
+      <Field
+        label="Dettaglio (facoltativo)"
+        value={f.details}
+        onChange={(e: any) => {
+          const details = e.target.value;
+          const amount = Number(f.amount);
+          const text = transactionText({ description: f.description, details });
+          const automatic = refundCategory(text, amount, history) || (amount > 0
+            ? incomeCategoryForAccount(f.accountId, accounts)
+            : keywordCategory(text, localCategories) || learnedCategory(text, amount, history));
+          setF({ ...f, details, category: automatic || f.category });
         }}
       />
       <Field
@@ -791,9 +823,10 @@ function TxForm({
         onChange={(e: any) => {
           const amount = e.target.value;
           const numericAmount = Number(amount);
-          const automatic = refundCategory(f.description, numericAmount, history) || (numericAmount > 0
+          const text = transactionText(f);
+          const automatic = refundCategory(text, numericAmount, history) || (numericAmount > 0
             ? incomeCategoryForAccount(f.accountId, accounts)
-            : keywordCategory(f.description, localCategories) || learnedCategory(f.description, numericAmount, history));
+            : keywordCategory(text, localCategories) || learnedCategory(text, numericAmount, history));
           setF({ ...f, amount, category: automatic || f.category });
         }}
       />
@@ -844,16 +877,12 @@ function AccountTypeOverview({
   categories: Category[];
 }) {
   if (account.type === "spese_mese") {
-    return <><AccountSettingsLink account={account}/><MonthlyExpenseOverview account={account} transactions={transactions} month={month} fixedExpenses={fixedExpenses} categories={categories}/></>;
+    return <MonthlyExpenseOverview account={account} transactions={transactions} month={month} fixedExpenses={fixedExpenses} categories={categories}/>;
   }
   if (account.type === "risparmi") {
-    return <><AccountSettingsLink account={account}/><SavingsOverview account={account} transactions={transactions} month={month} post={post} reload={reload} /></>;
+    return <SavingsOverview account={account} transactions={transactions} month={month} post={post} reload={reload} />;
   }
-  return <><AccountSettingsLink account={account}/><PersonalOverview account={account} transactions={transactions} month={month} fixedExpenses={fixedExpenses} categories={categories}/></>;
-}
-
-function AccountSettingsLink({account}:{account:Account}) {
-  return <div className="account-view-actions"><a href={`/configurazione/conti/${account.id}`}><Settings size={15}/> Impostazioni conto</a></div>;
+  return <PersonalOverview account={account} transactions={transactions} month={month} fixedExpenses={fixedExpenses} categories={categories}/>;
 }
 
 function CategorySpendingPanel({ transactions, categories }: { transactions: Tx[]; categories: Category[] }) {
@@ -875,13 +904,15 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
   const isCurrentPeriod = today >= selectedPeriod.start && today <= selectedPeriod.end;
   const reserved = isCurrentPeriod ? unpaidFixedTotal(fixedExpenses, account.id, month) : 0;
   const data = useMemo(() => calculateWeeks(transactions, month, reserved), [transactions, month, reserved]);
+  const currentWeek = data.weeks.find((week) => week.current);
   return <>
     <section className="weekly-summary weekly-summary-four compact-weekly-summary">
       {isCurrentPeriod ? <>
-        <article><span>Saldo corrente sul conto</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} iniziali + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
+        <article className="current-week-balance"><span>Saldo settimana corrente</span><strong>{eur.format(currentWeek?.remaining ?? 0)}</strong><small>Resta per la settimana{currentWeek ? ` · ${currentWeek.label}` : ""}</small></article>
+        <article><span>Saldo attuale sul conto</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} iniziali + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
+        <article><span>Saldo previsto sul conto</span><strong>{eur.format(data.remaining)}</strong><small>Considerando {eur.format(reserved)} di spese fisse non pagate</small></article>
         <article><span>Disponibile nel periodo</span><strong>{eur.format(data.pool)}</strong><small>Dal primo venerdì al giovedì finale</small></article>
-        <article><span>Speso finora</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
-        <article className="accent"><span>Effettivamente spendibile</span><strong>{eur.format(data.remaining)}</strong><small>{eur.format(reserved)} riservati per spese fisse non pagate</small></article>
+        <article><span>Speso fino ad ora</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
       </> : <>
         <article className="accent"><span>Saldo del periodo</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} residui + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
         <article><span>Entrate del periodo</span><strong>{eur.format(data.opening + data.income)}</strong><small>{eur.format(data.income)} entrate + {eur.format(data.opening)} rimasti dal periodo precedente</small></article>
@@ -910,21 +941,24 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
 }
 
 function PersonalOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
-  const months = useMemo(() => closingBalances(transactions, 7, month), [transactions, month]);
-  const savingLabel = month === new Date().toISOString().slice(0, 7) ? "Previsione risparmi" : "Risparmio del mese";
+  const months = useMemo(() => closingBalances(transactions, 7, month, account), [transactions, month, account]);
+  const selectedPeriod = dashboardPeriod(month, account);
+  const today = new Date().toISOString().slice(0, 10);
+  const isCurrentPeriod = today >= selectedPeriod.start && today <= selectedPeriod.end;
+  const savingLabel = isCurrentPeriod ? "Previsione risparmi" : "Risparmio del mese";
   const current = months.at(-1)?.balance ?? 0;
   const previous = months.at(-2)?.balance ?? current;
-  const savingDelta = current - previous;
-  const reserved = unpaidFixedTotal(fixedExpenses, account.id, month);
+  const reserved = isCurrentPeriod ? unpaidFixedTotal(fixedExpenses, account.id, month) : 0;
+  const savingDelta = current - previous - reserved;
   return <>
-    <section className="metric-grid">
+    <section className="metric-grid personal-metric-grid">
       <article className="metric"><span>Saldo reale attuale</span><strong>{eur.format(current)}</strong><small>Senza sottrarre le spese fisse da pagare</small></article>
       <article className="metric hero-metric"><span>Effettivamente spendibile</span><strong>{eur.format(current - reserved)}</strong><small>{eur.format(reserved)} riservati per spese fisse</small></article>
-      <article className="metric"><span>{savingLabel}</span><strong className={savingDelta >= 0 ? "positive" : "negative"}>{eur.format(savingDelta)}</strong><small>Delta rispetto al saldo del mese precedente</small></article>
+      <article className="metric"><span>{savingLabel}</span><strong className={savingDelta >= 0 ? "positive" : "negative"}>{eur.format(savingDelta)}</strong><small>{isCurrentPeriod ? `Delta previsto, al netto di ${eur.format(reserved)} ancora da pagare` : "Delta rispetto al saldo del mese precedente"}</small></article>
       <article className="metric"><span>Media risparmio mensile</span><strong>{eur.format(months.slice(1).reduce((sum, item, index) => sum + item.balance - months[index].balance, 0) / Math.max(1, months.length - 1))}</strong><small>Ultimi sei intervalli mensili</small></article>
     </section>
-    <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Saldo residuo</p><h2>Andamento e risparmio mensile</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:18,left:8,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>eur.format(value)} tickLine={false} axisLine={false} width={88}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:5,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:7}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
-    <CategorySpendingPanel transactions={transactions.filter((transaction) => transaction.date.startsWith(month))} categories={categories}/>
+    <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Saldo residuo</p><h2>Andamento e risparmio mensile</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:6,left:0,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>compactEur.format(value)} tickLine={false} axisLine={false} width={66}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:4,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
+    <CategorySpendingPanel transactions={transactions.filter((transaction) => transaction.date >= selectedPeriod.start && transaction.date <= selectedPeriod.end)} categories={categories}/>
   </>;
 }
 
@@ -946,29 +980,23 @@ function SavingsOverview({ account, transactions, month, post, reload }: { accou
       <div><p className="eyebrow">OBIETTIVO RISPARMIO</p><h2>{goal ? `${Math.round(percentage)}% raggiunto` : "Imposta il tuo traguardo"}</h2><p>{goal ? `Mancano ${eur.format(remaining)} per arrivare a ${eur.format(goal)}.` : "Dai un obiettivo a questo conto e segui i progressi nel tempo."}</p><Button onClick={saveGoal}>{goal ? "Modifica obiettivo" : "Imposta obiettivo"}</Button></div>
       <div className="savings-progress"><span>Saldo attuale</span><strong>{eur.format(balance)}</strong>{goal && <><Progress value={percentage}/><small>{eur.format(balance)} di {eur.format(goal)}</small></>}</div>
     </section>
-    <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Crescita del conto</p><h2>Saldo negli ultimi mesi</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:18,left:8,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>eur.format(value)} tickLine={false} axisLine={false} width={88}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:5,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:7}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
+    <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Crescita del conto</p><h2>Saldo negli ultimi mesi</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:6,left:0,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>compactEur.format(value)} tickLine={false} axisLine={false} width={66}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:4,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
   </>;
 }
 
-function closingBalances(transactions: Tx[], count: number, endMonth = new Date().toISOString().slice(0, 7)) {
+function closingBalances(transactions: Tx[], count: number, endMonth = new Date().toISOString().slice(0, 7), account: Account | null = null) {
   const endDate = new Date(`${endMonth}-01T12:00:00`);
   return Array.from({ length: count }, (_, index) => {
     const date = new Date(endDate);
     date.setMonth(endDate.getMonth() - count + 1 + index);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    const end = `${key}-31`;
+    const end = dashboardPeriod(key, account).end;
     return { key, label: new Intl.DateTimeFormat("it-IT", { month: "short", year: "2-digit" }).format(date), balance: transactions.filter((item) => item.date <= end).reduce((sum, item) => sum + item.amount, 0) };
   });
 }
 
 function dashboardPeriod(month: string, account: Account | null) {
-  const monthStart = new Date(`${month}-01T12:00:00`);
-  const key = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  if (account?.type === "spese_mese") {
-    const { start, end } = monthlyCycleBounds(monthStart);
-    return { start: key(start), end: key(end) };
-  }
-  return { start: `${month}-01`, end: key(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 12)) };
+  return accountPeriodBounds(month, account?.type || "risparmi");
 }
 
 function cycleStartFriday(monthStart: Date) {
@@ -989,15 +1017,7 @@ function monthlyCycleBounds(monthStart: Date) {
 }
 
 function movementCycleMonth(dateValue: string, account: Account) {
-  if (account.type !== "spese_mese") return dateValue.slice(0, 7);
-  const movementDate = new Date(`${dateValue}T12:00:00`);
-  for (const offset of [-1, 0, 1]) {
-    const candidate = new Date(movementDate.getFullYear(), movementDate.getMonth() + offset, 1, 12);
-    const bounds = monthlyCycleBounds(candidate);
-    if (movementDate >= bounds.start && movementDate <= bounds.end)
-      return `${candidate.getFullYear()}-${String(candidate.getMonth() + 1).padStart(2, "0")}`;
-  }
-  return dateValue.slice(0, 7);
+  return accountCycleMonth(dateValue, account.type);
 }
 
 function formatPeriod(period: { start: string; end: string }) {
@@ -1040,32 +1060,51 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
   return { opening, income, closing: opening + income - spent, pool, spent, count: expenses.length, transactionCount: rows.length, remaining: pool - spent, weeks };
 }
 function unpaidFixedTotal(expenses: FixedExpense[], accountId: number, month: string) {
-  return expenses.filter((expense) => expense.accountId === accountId && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month)).reduce((sum, expense) => sum + expense.amount, 0);
+  return expenses.filter((expense) => expense.active !== false && expense.accountId === accountId && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month)).reduce((sum, expense) => sum + expense.amount, 0);
 }
-function matchingFixedExpense(expenses: FixedExpense[], accountId: number, date: string, description: string, amount: number, excludedIds = new Set<number>()) {
+function matchingFixedExpense(expenses: FixedExpense[], accountId: number, accountType: string, date: string, description: string, amount: number, excludedIds = new Set<number>()) {
   if (!(amount < 0) || !accountId || !date) return undefined;
-  const month = date.slice(0, 7);
+  const month = accountCycleMonth(date, accountType);
   return expenses
-    .filter((expense) => expense.accountId === accountId && !excludedIds.has(expense.id) && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month) && Math.abs(expense.amount - Math.abs(amount)) <= 5 && hasFixedDescriptionMatch(expense.name, description))
+    .filter((expense) => expense.active !== false && expense.accountId === accountId && !excludedIds.has(expense.id) && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month) && fixedExpenseMatches(expense.name, expense.amount, description, amount, expense.keywords))
     .sort((a, b) => fixedExpenseSimilarity(a, amount, description) - fixedExpenseSimilarity(b, amount, description))[0];
 }
 function fixedExpenseSimilarity(expense: FixedExpense, amount: number, description: string) {
-  const normalized = description.toLowerCase();
-  const missingWords = expense.name.toLowerCase().split(/\s+/).filter((word) => word.length > 2 && !normalized.includes(word)).length;
-  return Math.abs(expense.amount - Math.abs(amount)) + missingWords * 2;
+  const difference = Math.abs(expense.amount - Math.abs(amount));
+  const exactAmount = difference < 0.005;
+  const compatibleText = hasFixedDescriptionMatch(expense.name, description, expense.keywords);
+  if (exactAmount && compatibleText) return 0;
+  if (compatibleText && difference <= 5) return 100 + difference;
+  if (exactAmount) return 200;
+  return Infinity;
+}
+function fixedExpenseMatches(name: string, expectedAmount: number, description: string, amount: number, keywords: string[] = []) {
+  const difference = Math.abs(expectedAmount - Math.abs(amount));
+  return difference < 0.005 || (difference <= 5 && hasFixedDescriptionMatch(name, description, keywords));
 }
 function fixedMatchWords(value: string) {
   return value.toLowerCase().replace(/[^a-zà-ÿ0-9]+/g, " ").split(/\s+/).filter((word) => word.length > 2);
 }
-function hasFixedDescriptionMatch(name: string, description: string) {
-  const nameWords = fixedMatchWords(name), descriptionWords = fixedMatchWords(description);
-  const compactName = nameWords.join(""), compactDescription = descriptionWords.join("");
-  return compactDescription.includes(compactName) || compactName.includes(compactDescription) ||
-    nameWords.some((nameWord) => descriptionWords.some((descriptionWord) => descriptionWord.includes(nameWord) || nameWord.includes(descriptionWord)));
+function hasFixedDescriptionMatch(name: string, description: string, keywords: string[] = []) {
+  const descriptionWords = fixedMatchWords(description), compactDescription = descriptionWords.join("");
+  return [name, ...keywords].some((candidate) => {
+    const candidateWords = fixedMatchWords(candidate), compactCandidate = candidateWords.join("");
+    return compactCandidate.length > 0 && (compactDescription.includes(compactCandidate) || compactCandidate.includes(compactDescription) ||
+      candidateWords.some((word) => descriptionWords.some((descriptionWord) => descriptionWord.includes(word) || word.includes(descriptionWord))));
+  });
 }
 
 function compactSearchText(value: string) {
   return value.normalize("NFKD").toLowerCase().replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+}
+
+function transactionAmountSearchValues(amount: number) {
+  const absoluteAmount = Math.abs(amount);
+  return [
+    String(absoluteAmount),
+    absoluteAmount.toFixed(2),
+    eur.format(absoluteAmount),
+  ];
 }
 
 function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses = [], history, post, done, reject, initialRows = [], source = "import", lockedAccount = false }: any) {
@@ -1086,36 +1125,37 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
   const previewRows = useMemo(() => {
     const existingAccountTransactions = history.filter((transaction: Tx) => String(transaction.accountId) === accountId);
     const claimedFixedExpenseIds = new Set<number>(rows.map((row) => Number(row.fixedExpenseId)).filter((id) => id > 0));
-    const claimedPendingTransactionIds = new Set<number>();
     const orderedRows = rows.map((row, index) => ({ row, index }));
     if (source === "enable_banking") orderedRows.sort((left, right) => transactionDateValue(right.row.date) - transactionDateValue(left.row.date) || left.index - right.index);
     return orderedRows.map(({ row, index }) => {
-      const sameDateMatch = existingAccountTransactions.find((transaction: Tx) =>
-        transaction.date === row.date &&
-        Number(transaction.amount) === Number(row.amount) &&
-        descriptionsOverlap(transaction, row) &&
-        !claimedPendingTransactionIds.has(transaction.id),
-      );
-      const pendingMatch = !sameDateMatch
-        ? history.find((transaction: Tx) =>
-          String(transaction.accountId) === accountId &&
-          transaction.source === "enable_banking" &&
-          transaction.openBankingStatus === "PDNG" &&
-          transaction.date !== row.date &&
-          Number(transaction.amount) === Number(row.amount) &&
-          descriptionsOverlap(transaction, row) &&
-          !claimedPendingTransactionIds.has(transaction.id),
-        )
+      const externalIdMatch = source === "enable_banking" && row.externalTransactionId
+        ? existingAccountTransactions.find((transaction: Tx) => transaction.source === "enable_banking" && transaction.externalTransactionId === row.externalTransactionId)
         : undefined;
-      const matchedTransaction = pendingMatch || sameDateMatch;
-      const updateMatch = matchedTransaction ? buildImportUpdate(matchedTransaction, row) : undefined;
-      if (updateMatch) claimedPendingTransactionIds.add(updateMatch.transaction.id);
-      const duplicate = Boolean(sameDateMatch && !updateMatch);
+      const similarExistingMatch = source === "import"
+        ? existingAccountTransactions.find((transaction: Tx) => {
+          if (Number(transaction.amount) !== Number(row.amount)) return false;
+          const days = calendarDayDistance(transaction.date, row.date);
+          return days <= 2 && transactionSimilarity(transaction, row) >= (days === 0 ? 0.6 : 0.8);
+        })
+        : source === "enable_banking" && !externalIdMatch
+          ? existingAccountTransactions.find((transaction: Tx) => {
+            return Number(transaction.amount) === Number(row.amount) && sameTransactionDescription(transaction, row);
+          })
+          : undefined;
+      const sameFileMatch = source === "import" ? rows.slice(0, index).find((transaction: Tx) =>
+        transaction.date === row.date && Number(transaction.amount) === Number(row.amount) && transactionSimilarity(transaction, row) >= 0.6,
+      ) : undefined;
+      const updateMatch = externalIdMatch
+        ? buildImportUpdate(externalIdMatch, row)
+        : similarExistingMatch
+          ? buildImportUpdate(similarExistingMatch, row, true)
+          : undefined;
+      const duplicate = Boolean((externalIdMatch && !updateMatch) || (similarExistingMatch && !updateMatch) || sameFileMatch);
       const selectedFixedExpenseId = Number(row.fixedExpenseId);
       const fixedMatch = selectedFixedExpenseId > 0
         ? fixedExpenses.find((expense: FixedExpense) => expense.id === selectedFixedExpenseId)
-        : matchingFixedExpense(fixedExpenses, Number(accountId), row.date, row.description, Number(row.amount), claimedFixedExpenseIds);
-      const willImport = updateMatch ? row.confirmUpdate === true : !duplicate || row.force === true;
+        : matchingFixedExpense(fixedExpenses, Number(accountId), accounts.find((account: Account) => String(account.id) === accountId)?.type || "personale", row.date, transactionText(row), Number(row.amount), claimedFixedExpenseIds);
+      const willImport = row.exclude !== true && (updateMatch ? updateMatch.autoUpdate === true || row.confirmUpdate === true : !duplicate || row.force === true);
       return { ...row, index, duplicate, updateMatch, fixedMatch, willImport };
     });
   }, [rows, history, accountId, fixedExpenses, source]);
@@ -1214,7 +1254,7 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
               {filteredPreviewRows.map((r) => (
                 <div key={r.index} className={r.willImport ? "will-import" : "duplicate-row"}>
                   <span>{r.date}</span>
-                  <b title={r.details || undefined}>{r.description}</b>
+                  <TransactionDescription description={r.description} details={r.details}/>
                   <span className={r.amount >= 0 ? "positive" : "negative"}>
                     {eur.format(r.amount)}
                   </span>
@@ -1222,25 +1262,25 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
                     <span className="sr-only">Categoria di {r.description}</span>
                     <select value={r.category} onChange={(event) => {
                       const category = event.target.value;
-                      const description = normalizedDescription(r.details || r.description);
                       setRows((current) => current.map((item, index) => {
-                        const sameExpense = r.amount < 0 && Number(item.amount) < 0 && normalizedDescription(item.details || item.description) === description;
+                        const sameExpense = r.amount < 0 && Number(item.amount) < 0 && sameTransactionDescription(item, r);
                         return index === r.index || sameExpense ? { ...item, category, categoryEdited: true } : item;
                       }));
                     }}>
                       {localCategories.map((category: Category) => <option key={category.id} value={category.name}>{category.name}</option>)}
                     </select>
                   </label>
-                  <span className="import-status">{r.bankStatus === "PDNG" ? "Non contabilizzata · " : ""}{r.updateMatch && !r.confirmUpdate ? "Aggiornamento disponibile" : r.willImport ? (r.confirmUpdate ? "Sarà aggiornato" : "Sarà importato") : "Duplicato"}</span>
-                  {r.updateMatch && <label className="force-import"><input type="checkbox" checked={r.confirmUpdate === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, confirmUpdate: event.target.checked } : item))}/><span>Conferma aggiornamento{r.updateMatch.dateChanged && <> · Data: {r.updateMatch.transaction.date} → {r.date}</>}{r.updateMatch.descriptionChanged && <> · Descrizione: {r.updateMatch.transaction.description}{r.updateMatch.transaction.details ? ` — ${r.updateMatch.transaction.details}` : ""} → {r.updateMatch.nextDescription}{r.updateMatch.nextDetails ? ` — ${r.updateMatch.nextDetails}` : ""}</>}{r.updateMatch.statusChanged && <> · Stato: non contabilizzato → contabilizzato</>}</span></label>}
+                  <span className="import-status">{r.exclude ? "Escluso" : r.updateMatch?.autoUpdate ? "Sarà aggiornato con i nuovi dettagli" : r.updateMatch && !r.confirmUpdate ? "Aggiornamento disponibile" : r.willImport ? (r.confirmUpdate ? "Sarà aggiornato" : "Sarà importato") : "Duplicato"}</span>
+                  {r.updateMatch && !r.updateMatch.autoUpdate && <label className="force-import"><input type="checkbox" checked={r.confirmUpdate === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, confirmUpdate: event.target.checked } : item))}/><span>Conferma aggiornamento{r.updateMatch.dateChanged && <> · Data: {r.updateMatch.transaction.date} → {r.date}</>}{r.updateMatch.amountChanged && <> · Importo: {eur.format(r.updateMatch.transaction.amount)} → {eur.format(Number(r.amount))}</>}{r.updateMatch.descriptionChanged && <> · Descrizione: {r.updateMatch.transaction.description}{r.updateMatch.transaction.details ? ` — ${r.updateMatch.transaction.details}` : ""} → {r.updateMatch.nextDescription}{r.updateMatch.nextDetails ? ` — ${r.updateMatch.nextDetails}` : ""}</>}</span></label>}
                   {r.fixedMatch && <label className="force-import"><input type="checkbox" checked={r.fixedExpenseId === r.fixedMatch.id} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, fixedExpenseId: event.target.checked ? r.fixedMatch.id : undefined } : item))}/><span>Conferma spesa fissa: {r.fixedMatch.name}</span></label>}
                   {r.duplicate && <label className="force-import"><input type="checkbox" checked={r.force === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, force: event.target.checked } : item))}/><span>Importa comunque</span></label>}
+                  {!r.duplicate && <label className="force-import"><input type="checkbox" checked={r.exclude === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, exclude: event.target.checked } : item))}/><span>Non importare questo movimento</span></label>}
                 </div>
               ))}
               {!filteredPreviewRows.length && <p className="preview-filter-empty">Nessun movimento in questo filtro.</p>}
             </div>
             <small>
-              I movimenti evidenziati saranno importati. I duplicati restano esclusi, salvo quelli selezionati con “Importa comunque”.
+              I movimenti evidenziati saranno importati. Puoi escludere quelli che non vuoi salvare; i duplicati restano esclusi salvo “Importa comunque”.
             </small>
           </div>
         )}
@@ -1265,14 +1305,14 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
                 source,
                 rows: previewRows.map((row) => ({
                   ...row,
-                  updateTransactionId: row.confirmUpdate === true ? row.updateMatch?.transaction.id : undefined,
-                  confirmUpdate: row.confirmUpdate === true,
+                  updateTransactionId: row.updateMatch?.autoUpdate === true || row.confirmUpdate === true ? row.updateMatch?.transaction.id : undefined,
+                  confirmUpdate: row.updateMatch?.autoUpdate === true || row.confirmUpdate === true,
                   skip: !row.willImport,
                 })),
               });
               if (r.error) { setError(r.error); return; }
               done(
-                `${r.inserted} movimenti aggiunti${r.reconciled ? ` · ${r.reconciled} movimenti aggiornati` : ""} · ${r.duplicates} duplicati ignorati`,
+                `${r.inserted} movimenti aggiunti${r.reconciled ? ` · ${r.reconciled} movimenti aggiornati` : ""}${r.excluded ? ` · ${r.excluded} esclusi` : ""} · ${r.duplicates} duplicati ignorati`,
               );
             }}
           >
@@ -1288,16 +1328,31 @@ function normalizedDescription(description: string) {
   return description.trim().toLowerCase().replace(/^(?:pagamento|pagamennto)\b[\s\S]*?\bpresso\b[\s\u00a0]*/i, "").replace(/\s+/g, " ");
 }
 
-function descriptionsOverlap(left: { description: string; details?: string | null }, right: { description: string; details?: string | null }) {
-  const parts = (item: { description: string; details?: string | null }) =>
-    [item.description, item.details].filter((value): value is string => typeof value === "string" && value.trim().length > 0).map(normalizedDescription);
-  const leftParts = parts(left), rightParts = parts(right);
-  return leftParts.some((leftPart) => rightParts.some((rightPart) =>
-    leftPart === rightPart || (leftPart.length >= 2 && rightPart.length >= 2 && (leftPart.includes(rightPart) || rightPart.includes(leftPart))),
-  ));
+function transactionText(item: { description?: string | null; details?: string | null }) {
+  return [item.description, item.details].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" ");
 }
 
-function buildImportUpdate(transaction: Tx, incoming: { date: string; description: string; details?: string | null; bankStatus?: "BOOK" | "PDNG" }) {
+function sameTransactionDescription(left: { description?: string | null; details?: string | null }, right: { description?: string | null; details?: string | null }) {
+  const field = (value?: string | null) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return field(left.description) === field(right.description) && field(left.details) === field(right.details);
+}
+
+function transactionSimilarity(left: { description?: string | null; details?: string | null }, right: { description?: string | null; details?: string | null }) {
+  const tokens = (item: { description?: string | null; details?: string | null }) => new Set(
+    normalizedDescription(transactionText(item)).replace(/[^a-zà-ÿ0-9 ]/g, " ").split(/\s+/).filter((word) => word.length > 1),
+  );
+  const leftTokens = tokens(left), rightTokens = tokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  const common = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return common / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function calendarDayDistance(left: string, right: string) {
+  const leftTime = Date.parse(`${left.slice(0, 10)}T00:00:00Z`), rightTime = Date.parse(`${right.slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) ? Math.abs(leftTime - rightTime) / 86400000 : Infinity;
+}
+
+function buildImportUpdate(transaction: Tx, incoming: { date: string; amount: number; description: string; details?: string | null }, preserveCore = false) {
   const incomingDescription = String(incoming.description || "").trim();
   const incomingDetails = typeof incoming.details === "string" ? incoming.details.trim() || null : null;
   const existingScore = normalizedDescription(transaction.description).length + normalizedDescription(transaction.details || "").length;
@@ -1310,10 +1365,10 @@ function buildImportUpdate(transaction: Tx, incoming: { date: string; descriptio
   const nextDescription = useIncomingDescription ? incomingDescription : transaction.description;
   const nextDetails = useIncomingDescription ? incomingDetails : transaction.details || null;
   const descriptionChanged = nextDescription !== transaction.description || nextDetails !== (transaction.details || null);
-  const dateChanged = transaction.date !== incoming.date && transaction.source === "enable_banking" && transaction.openBankingStatus === "PDNG";
-  const statusChanged = transaction.openBankingStatus === "PDNG" && incoming.bankStatus === "BOOK";
-  return dateChanged || descriptionChanged || statusChanged
-    ? { transaction, dateChanged, descriptionChanged, statusChanged, nextDescription, nextDetails }
+  const dateChanged = !preserveCore && transaction.date !== incoming.date;
+  const amountChanged = !preserveCore && Number(transaction.amount) !== Number(incoming.amount);
+  return dateChanged || amountChanged || descriptionChanged
+    ? { transaction, dateChanged, amountChanged, descriptionChanged, nextDescription, nextDetails, autoUpdate: preserveCore }
     : undefined;
 }
 
@@ -1466,7 +1521,7 @@ function learnedCategory(description: string, amount: number, history: Tx[]) {
   if (key.length < 3) return "";
   const match = history.find((t) => {
     if (t.amount >= 0) return false;
-    const past = merchantKey(t.description);
+    const past = merchantKey(transactionText(t));
     return (
       past === key ||
       (past.length > 5 &&
@@ -1476,13 +1531,13 @@ function learnedCategory(description: string, amount: number, history: Tx[]) {
   });
   return match?.category || "";
 }
-function refundCategory(description: string, amount: number, history: Array<{ description: string; amount: number }>) {
+function refundCategory(description: string, amount: number, history: Array<{ description: string; details?: string | null; amount: number }>) {
   if (!(amount > 0)) return "";
   const key = description.trim().toLowerCase().replace(/\s+/g, " ");
   if (key.length < 3) return "";
   return history.some((transaction) =>
     transaction.amount < 0 &&
-    transaction.description.trim().toLowerCase().replace(/\s+/g, " ") === key &&
+    transactionText(transaction).trim().toLowerCase().replace(/\s+/g, " ") === key &&
     Math.abs(Math.abs(transaction.amount) - amount) < 0.005
   ) ? "Rimborso" : "";
 }
@@ -1548,10 +1603,10 @@ function normalizeImport(
   const rows = parsedRows.map((row) => ({
     ...row,
     category:
-      refundCategory(row.details || row.description, row.amount, refundHistory) ||
-      (row.amount < 0 ? keywordCategory(row.details || row.description, categories) : "") ||
-      learnedCategory(row.details || row.description, row.amount, history) ||
-      autoCategory(row.details || row.description, row.amount, categories),
+      refundCategory(transactionText(row), row.amount, refundHistory) ||
+      (row.amount < 0 ? keywordCategory(transactionText(row), categories) : "") ||
+      learnedCategory(transactionText(row), row.amount, history) ||
+      autoCategory(transactionText(row), row.amount, categories),
   }));
   return { rows };
 }

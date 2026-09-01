@@ -20,6 +20,43 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+*credentials*.json
+*secrets*.json
+
+# local databases and runtime data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+/data/
+/local-data/
+/uploads/
+/backups/
+
+# personal financial exports
+*.csv
+*.xls
+*.xlsx
+*.ofx
+*.qif
+*.mt940
+
+# backups and generic logs
+*.bak
+*.backup
+*.dump
+*.log
 
 # debug
 npm-debug.log*

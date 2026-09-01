@@ -90,11 +90,15 @@ export const transactions = sqliteTable("transactions", {
   amount: real("amount").notNull(),
   category: text("category").notNull().default("Altro"),
   source: text("source").notNull().default("manuale"),
+  externalTransactionId: text("external_transaction_id"),
   openBankingStatus: text("open_banking_status"),
   spreadAcrossWeeks: integer("spread_across_weeks", { mode: "boolean" }).notNull().default(false),
   fingerprint: text("fingerprint").notNull(),
   createdAt: text("created_at").notNull(),
-}, (table) => [uniqueIndex("transactions_owner_fingerprint_unique").on(table.ownerEmail, table.fingerprint)]);
+}, (table) => [
+  uniqueIndex("transactions_owner_fingerprint_unique").on(table.ownerEmail, table.fingerprint),
+  uniqueIndex("transactions_external_id_unique").on(table.ownerEmail, table.accountId, table.source, table.externalTransactionId),
+]);
 
 export const budgets = sqliteTable("budgets", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -127,7 +131,17 @@ export const categoryKeywords = sqliteTable("category_keywords", {
   ownerEmail: text("owner_email").notNull(),
   categoryId: integer("category_id").notNull(),
   keyword: text("keyword").notNull(),
+  source: text("source").notNull().default("manual"),
 }, (table) => [uniqueIndex("category_keywords_owner_category_keyword_unique").on(table.ownerEmail, table.categoryId, table.keyword)]);
+
+export const keywordBlacklists = sqliteTable("keyword_blacklists", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull(),
+  scope: text("scope").notNull(),
+  keyword: text("keyword").notNull(),
+  source: text("source").notNull().default("manual"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [uniqueIndex("keyword_blacklists_owner_scope_keyword_unique").on(table.ownerEmail, table.scope, table.keyword)]);
 
 export const appFlags = sqliteTable("app_flags", {
   id: text("id").primaryKey(),
@@ -142,9 +156,19 @@ export const fixedExpenses = sqliteTable("fixed_expenses", {
   accountId: integer("account_id").notNull(),
   name: text("name").notNull(),
   category: text("category"),
+  keywords: text("keywords").notNull().default("[]"),
   amount: real("amount").notNull(),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("idx_fixed_expenses_owner_account").on(table.ownerEmail, table.accountId)]);
+
+export const fixedExpenseKeywordSources = sqliteTable("fixed_expense_keyword_sources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull(),
+  fixedExpenseId: integer("fixed_expense_id").notNull(),
+  keyword: text("keyword").notNull(),
+  source: text("source").notNull().default("manual"),
+}, (table) => [uniqueIndex("fixed_expense_keyword_sources_owner_expense_keyword_unique").on(table.ownerEmail, table.fixedExpenseId, table.keyword)]);
 
 export const fixedExpensePayments = sqliteTable("fixed_expense_payments", {
   id: integer("id").primaryKey({ autoIncrement: true }),

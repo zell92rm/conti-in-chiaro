@@ -37,6 +37,10 @@
   line-height: 1.55;
 }
 .enable-banking-prerequisites li + li { margin-top: 5px; }
+.enable-banking-prerequisites .integration-urls {
+  margin: 14px 0 0;
+  background: var(--paper);
+}
 
 .bank-link-panel .bank-connect-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));

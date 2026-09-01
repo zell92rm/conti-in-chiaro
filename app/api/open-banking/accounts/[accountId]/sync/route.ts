@@ -36,9 +36,9 @@ export async function POST(request: Request, context: { params: Promise<{ accoun
       db.select().from(transactions).where(eq(transactions.ownerEmail, user.email)),
     ]);
     const keywords = keywordRows.map(row => ({ keyword: row.keyword.toLowerCase(), category: categoryRows.find(category => category.id === row.categoryId)?.name })).filter(row => row.category);
-    const rows: Array<{ date: string; description: string; amount: number; category: string; bankStatus: "BOOK" | "PDNG" }> = [];
+    const rows: Array<{ date: string; description: string; details?: string; amount: number; category: string; bankStatus: "BOOK"; externalTransactionId?: string }> = [];
     for (const raw of remoteTransactions) {
-      const row = normalizeTransaction(raw, dateTo);
+      const row = normalizeTransaction(raw);
       if (!row || row.date < body.dateFrom! || row.date > dateTo) continue;
       const category = categorize(row.description, row.amount, keywords, history, accountId);
       rows.push({ ...row, category });
@@ -63,23 +63,21 @@ export async function POST(request: Request, context: { params: Promise<{ accoun
 
 async function fetchAllTransactions(userId: number, uid: string, dateFrom: string, dateTo: string) {
   const rows: EnableTransaction[] = [];
-  for (const transactionStatus of ["BOOK", "PDNG"] as const) {
-    const seen = new Set<string>();
-    let continuation: string | null = null;
-    for (let page = 0; page < 50; page++) {
-      const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, transaction_status: transactionStatus });
-      if (continuation) query.set("continuation_key", continuation);
-      const response = await enableBankingFetch(userId, `/accounts/${encodeURIComponent(uid)}/transactions?${query}`);
-      if (!response.ok) throw await upstreamError(response);
-      const payload = await response.json() as { transactions?: EnableTransaction[]; continuation_key?: string | null };
-      if (Array.isArray(payload.transactions)) rows.push(...payload.transactions);
-      continuation = typeof payload.continuation_key === "string" && payload.continuation_key ? payload.continuation_key : null;
-      if (!continuation) break;
-      if (seen.has(continuation)) throw new Error("Paginazione non valida");
-      seen.add(continuation);
-    }
-    if (continuation) throw new Error(`Troppe pagine di transazioni ${transactionStatus}`);
+  const seen = new Set<string>();
+  let continuation: string | null = null;
+  for (let page = 0; page < 50; page++) {
+    const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, transaction_status: "BOOK" });
+    if (continuation) query.set("continuation_key", continuation);
+    const response = await enableBankingFetch(userId, `/accounts/${encodeURIComponent(uid)}/transactions?${query}`);
+    if (!response.ok) throw await upstreamError(response);
+    const payload = await response.json() as { transactions?: EnableTransaction[]; continuation_key?: string | null };
+    if (Array.isArray(payload.transactions)) rows.push(...payload.transactions);
+    continuation = typeof payload.continuation_key === "string" && payload.continuation_key ? payload.continuation_key : null;
+    if (!continuation) break;
+    if (seen.has(continuation)) throw new Error("Paginazione non valida");
+    seen.add(continuation);
   }
+  if (continuation) throw new Error("Troppe pagine di transazioni contabilizzate");
   return rows;
 }
 async function upstreamError(response: Response) {
@@ -89,7 +87,7 @@ async function upstreamError(response: Response) {
   return new EnableBankingUpstreamError(response.status, code, message);
 }
 async function fetchBalance(userId: number, uid: string) { const response = await enableBankingFetch(userId, `/accounts/${encodeURIComponent(uid)}/balances`); if (!response.ok) return null; const payload = await response.json() as { balances?: Array<{ balance_amount?: { amount?: unknown; currency?: unknown }; balance_type?: unknown }> }; const preferred = payload.balances?.find(item => item.balance_type === "CLAV") || payload.balances?.[0]; const amount = Number(preferred?.balance_amount?.amount); return Number.isFinite(amount) ? { amount, currency: String(preferred?.balance_amount?.currency || "EUR") } : null; }
-function normalizeTransaction(raw: EnableTransaction, pendingFallbackDate: string) { const numeric = Number(raw.transaction_amount?.amount); if (!Number.isFinite(numeric)) return null; const bankStatus = raw.status === "PDNG" ? "PDNG" as const : "BOOK" as const; const valueDate = normalizeEnableBankingDate(raw.value_date); const pendingTransactionDate = bankStatus === "PDNG" ? normalizeEnableBankingDate(raw.transaction_date) : undefined; const date = valueDate || pendingTransactionDate || (bankStatus === "PDNG" ? normalizeEnableBankingDate(pendingFallbackDate) : undefined); if (!date) return null; const amount = raw.credit_debit_indicator === "DBIT" ? -Math.abs(numeric) : raw.credit_debit_indicator === "CRDT" ? Math.abs(numeric) : numeric; const remittance = Array.isArray(raw.remittance_information) ? raw.remittance_information.map(String).join(" · ") : ""; const description = remittance || (typeof raw.note === "string" ? raw.note : "") || (typeof raw.bank_transaction_code?.description === "string" ? raw.bank_transaction_code.description : "") || (typeof raw.bank_transaction_code?.code === "string" ? raw.bank_transaction_code.code : "") || (typeof raw.entry_reference === "string" ? raw.entry_reference : "Movimento bancario"); return { date, amount, description: cleanEnableBankingDescription(description).slice(0, 500), bankStatus }; }
+function normalizeTransaction(raw: EnableTransaction) { const numeric = Number(raw.transaction_amount?.amount); if (!Number.isFinite(numeric) || raw.status === "PDNG") return null; const date = normalizeEnableBankingDate(raw.value_date) || normalizeEnableBankingDate(raw.booking_date); if (!date) return null; const amount = raw.credit_debit_indicator === "DBIT" ? -Math.abs(numeric) : raw.credit_debit_indicator === "CRDT" ? Math.abs(numeric) : numeric; const remittance = Array.isArray(raw.remittance_information) ? raw.remittance_information.map(String).join(" · ") : ""; const note = typeof raw.note === "string" ? raw.note.trim() : ""; const bankDescription = typeof raw.bank_transaction_code?.description === "string" ? raw.bank_transaction_code.description.trim() : ""; const bankCode = typeof raw.bank_transaction_code?.code === "string" ? raw.bank_transaction_code.code.trim() : ""; const reference = typeof raw.entry_reference === "string" ? raw.entry_reference.trim() : ""; const description = remittance || note || bankDescription || bankCode || reference || "Movimento bancario"; const normalizedDescription = cleanEnableBankingDescription(description).slice(0, 500); const details = Array.from(new Set([note, bankDescription, bankCode, reference].map((value) => value.trim()).filter((value) => value && cleanEnableBankingDescription(value) !== normalizedDescription))).join(" · ").slice(0, 2000) || undefined; const externalTransactionId = typeof raw.transaction_id === "string" || typeof raw.transaction_id === "number" ? String(raw.transaction_id).trim().slice(0, 500) || undefined : undefined; return { date, amount, description: normalizedDescription, details, bankStatus: "BOOK" as const, externalTransactionId }; }
 function normalizeEnableBankingDate(raw: unknown) { const value = typeof raw === "string" ? raw.trim() : ""; if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10); const match = value.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4}|\d{2})(?:\D|$)/); if (!match) return undefined; const year = match[3].length === 2 ? `20${match[3]}` : match[3]; return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`; }
 function cleanEnableBankingDescription(description: string) { return description.trim().replace(/^(?:pagamento|pagamennto)\b[\s\S]*?\bpresso\b[\s\u00a0]*/i, "").trim().replace(/\s+/g, " ") || "Movimento bancario"; }
 function categorize(description: string, amount: number, keywords: Array<{ keyword: string; category: string | undefined }>, history: Array<{ description: string; amount: number; category: string; accountId: number }>, accountId: number) { if (amount > 0) return /rimbor|refund|storno/i.test(description) ? "Rimborso" : "Ricarica"; const normalized = description.toLowerCase(); const keyword = keywords.find(item => normalized.includes(item.keyword)); if (keyword?.category) return keyword.category; const learned = history.filter(item => item.accountId === accountId && item.amount < 0 && item.description.toLowerCase() === normalized).at(-1); return learned?.category || "Altro"; }

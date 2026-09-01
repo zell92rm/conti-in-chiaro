@@ -15,7 +15,8 @@ export function getDb() {
 let settingsSchemaReady: Promise<unknown> | null = null;
 
 export function ensureUserSettingsSchema() {
-  settingsSchemaReady ??= env.DB.batch([
+  settingsSchemaReady ??= (async () => {
+    await env.DB.batch([
     env.DB.prepare(
       `CREATE TABLE IF NOT EXISTS user_settings (
         owner_email TEXT PRIMARY KEY NOT NULL,
@@ -35,7 +36,29 @@ export function ensureUserSettingsSchema() {
         owner_email TEXT NOT NULL,
         category_id INTEGER NOT NULL,
         keyword TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
         UNIQUE(owner_email, category_id, keyword)
+      )`,
+    ),
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS keyword_blacklists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        owner_email TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        keyword TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at TEXT NOT NULL,
+        UNIQUE(owner_email, scope, keyword)
+      )`,
+    ),
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS fixed_expense_keyword_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        owner_email TEXT NOT NULL,
+        fixed_expense_id INTEGER NOT NULL,
+        keyword TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        UNIQUE(owner_email, fixed_expense_id, keyword)
       )`,
     ),
     env.DB.prepare(
@@ -80,6 +103,11 @@ export function ensureUserSettingsSchema() {
         UNIQUE(fixed_expense_id, month)
       )`,
     ),
-  ]);
+    ]);
+    const keywordColumns = await env.DB.prepare("PRAGMA table_info(category_keywords)").all<{ name: string }>();
+    if (!keywordColumns.results.some((column) => column.name === "source")) {
+      await env.DB.prepare("ALTER TABLE category_keywords ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'").run();
+    }
+  })();
   return settingsSchemaReady;
 }

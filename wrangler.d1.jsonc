@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "conti-in-chiaro",
+  "compatibility_date": "2026-05-22",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "conti-in-chiaro-db",
+      "database_id": "00496783-18d0-4f56-9f6d-63f9920e2add",
+      "migrations_dir": "drizzle",
+      "migrations_table": "__drizzle_migrations"
+    }
+  ]
+}
