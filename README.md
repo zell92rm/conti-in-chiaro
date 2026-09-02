@@ -23,6 +23,7 @@ L'applicazione è pensata per un'installazione personale con un solo utente: il 
 - Inserimento e modifica di data, descrizione, dettaglio, importo e categoria.
 - Ricerca per descrizione, categoria, conto, data e importo.
 - Importazione CSV/XLSX con anteprima e selezione dei movimenti.
+- L'importazione da file è stata testata e configurata esclusivamente per i CSV di HYPE, i CSV di Revolut e i file XLSX di Intesa Sanpaolo. File provenienti da altri istituti o in formati differenti potrebbero non essere riconosciuti correttamente.
 - Importazione dei movimenti contabilizzati (`BOOK`) tramite Enable Banking.
 - Riconoscimento dei duplicati tra inserimenti manuali, file ed Enable Banking.
 - Aggiornamenti non distruttivi quando una nuova fonte fornisce maggiori informazioni.
@@ -94,7 +95,7 @@ Il server locale usa HTTPS con un certificato autofirmato. Il browser può mostr
 
 Lo schema è in `db/schema.ts` e le migrazioni SQL in `drizzle/`. Il binding applicativo D1 è `DB`.
 
-`.openai/hosting.json` dichiara il binding logico usato dalla build. `wrangler.d1.jsonc` è riservato alle migrazioni e non deve essere usato per il deploy del Worker.
+`.deployment/hosting.json` dichiara il binding logico usato dalla build. `wrangler.d1.jsonc` è riservato alle migrazioni e non deve essere usato per il deploy del Worker.
 
 ```bash
 # Database locale
@@ -178,7 +179,9 @@ wrangler.d1.jsonc            Configurazione delle sole migrazioni D1
 3. Eseguire `npm run lint` e `npm test`.
 4. Documentare nella pull request comportamento, migrazioni e implicazioni di sicurezza.
 
-Non è presente un file di licenza. Prima di riutilizzare o distribuire il progetto, concordare i termini con il proprietario della repository.
+### Licenza
+
+Il progetto è distribuito sotto la **GNU Affero General Public License v3.0 (AGPL-3.0)**. Consulta il file [LICENSE](LICENSE) per il testo completo e le condizioni di utilizzo, modifica e distribuzione.
 
 ---
 
@@ -201,6 +204,7 @@ It is designed as a personal, single-user installation. The first registered acc
 - Transaction creation and editing with date, description, optional details, amount, and category.
 - Search by description, category, account, date, and amount.
 - CSV/XLSX imports with review and per-transaction selection.
+- File import has been tested and configured exclusively for HYPE CSV files, Revolut CSV files, and Intesa Sanpaolo XLSX files. Files from other institutions or in different formats may not be recognized correctly.
 - Enable Banking imports for booked (`BOOK`) transactions.
 - Duplicate detection across manual entries, files, and Enable Banking.
 - Non-destructive updates when a source provides additional information.
@@ -272,7 +276,7 @@ The local server uses HTTPS with a self-signed certificate. The browser may disp
 
 The schema is located in `db/schema.ts`, and SQL migrations are stored in `drizzle/`. The application D1 binding is `DB`.
 
-`.openai/hosting.json` declares the logical build binding. `wrangler.d1.jsonc` is migration-only and must not be used to deploy the Worker.
+`.deployment/hosting.json` declares the logical build binding. `wrangler.d1.jsonc` is migration-only and must not be used to deploy the Worker.
 
 ```bash
 # Local database
@@ -356,4 +360,6 @@ wrangler.d1.jsonc            D1 migration-only configuration
 3. Run `npm run lint` and `npm test`.
 4. Document behavior, migrations, and security implications in the pull request.
 
-No license file is currently included. Agree on licensing terms with the repository owner before reusing or distributing the project.
+### License
+
+This project is distributed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [LICENSE](LICENSE) for the full text and the terms governing use, modification, and distribution.

@@ -20,8 +20,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TransactionDescription } from "@/components/transaction-description";
+import { useLocale } from "@/components/locale-provider";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { accountCycleMonth, accountPeriodBounds } from "@/lib/account-period";
+import { translateDefaultCategory } from "@/lib/i18n";
 import {
   Dialog,
   DialogContent,
@@ -81,13 +83,13 @@ const compactEur = new Intl.NumberFormat("it-IT", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-const monthName = new Intl.DateTimeFormat("it-IT", {
-  month: "long",
-  year: "numeric",
-});
-
 export default function ExpenseApp({ displayName }: { displayName: string }) {
+  const { locale } = useLocale();
   const isMobile = useIsMobile();
+  const monthName = useMemo(() => new Intl.DateTimeFormat(locale === "en" ? "en-GB" : "it-IT", {
+    month: "long",
+    year: "numeric",
+  }), [locale]);
   const [accounts, setAccounts] = useState<Account[]>([]),
     [txs, setTxs] = useState<Tx[]>([]),
     [categories, setCategories] = useState<Category[]>([]),
@@ -197,10 +199,11 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     if (!query) return current;
     return current.filter((transaction) => {
       const accountName = accounts.find((account) => account.id === transaction.accountId)?.name || "";
-      return [transaction.description, transaction.category, accountName, transaction.date, ...transactionAmountSearchValues(transaction.amount)]
+      const localizedCategory = translateDefaultCategory(transaction.category, locale);
+      return [transaction.description, localizedCategory, accountName, transaction.date, ...transactionAmountSearchValues(transaction.amount)]
         .some((value) => compactSearchText(value).indexOf(query) !== -1);
     });
-  }, [current, transactionSearch, accounts]);
+  }, [current, transactionSearch, accounts, locale]);
   useEffect(() => {
     if (!transactionSearch) return;
     const normalizedQuery = compactSearchText(transactionSearch);
@@ -382,10 +385,10 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
           </a>
         </nav>
         <div className="privacy-note">
-          <span>●</span> Spazio privato
-          <br />
-          <small>I dati sono visibili solo a te.</small>
-          <br />
+          <div className="privacy-links">
+            <a href="/privacy">Privacy</a>
+            <a href="/terms">{locale === "en" ? "Terms" : "Termini"}</a>
+          </div>
           <form action="/api/auth/logout" method="post">
             <button type="submit" className="logout-button">
               <LogOut size={13} /> Esci
@@ -405,7 +408,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
         <header>
           <div>
             <p className="eyebrow">IL TUO QUADRO FINANZIARIO</p>
-            <h1>Ciao, {displayName.split(" ")[0]}</h1>
+            <h1>{locale === "en" ? "Hello" : "Ciao"}, {displayName.split(" ")[0]}</h1>
           </div>
           <div className="header-actions">
             <select
@@ -423,7 +426,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
             </select>
             {selectedAccount ? <div className="month-navigation" aria-label="Periodo visualizzato">
               <button type="button" onClick={() => moveMonth(-1)} disabled={selectedAccount.type === "spese_mese" && expenseMonthIndex <= 0} aria-label="Mese precedente"><ChevronLeft size={17}/></button>
-              <label><span>{monthName.format(new Date(month + "-01T12:00:00"))}</span><small>{formatPeriod(period)}</small>{selectedAccount.type === "spese_mese" ? <select aria-label="Scegli periodo" value={month} onChange={(event) => setMonth(event.target.value)}>{availableExpenseMonths.map((availableMonth) => <option value={availableMonth} key={availableMonth}>{monthName.format(new Date(`${availableMonth}-01T12:00:00`))}</option>)}</select> : <input aria-label="Scegli mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>}</label>
+              <label><span>{monthName.format(new Date(month + "-01T12:00:00"))}</span><small>{formatPeriod(period, locale)}</small>{selectedAccount.type === "spese_mese" ? <select aria-label="Scegli periodo" value={month} onChange={(event) => setMonth(event.target.value)}>{availableExpenseMonths.map((availableMonth) => <option value={availableMonth} key={availableMonth}>{monthName.format(new Date(`${availableMonth}-01T12:00:00`))}</option>)}</select> : <input aria-label="Scegli mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>}</label>
               <button type="button" onClick={() => moveMonth(1)} disabled={selectedAccount.type === "spese_mese" ? expenseMonthIndex < 0 || expenseMonthIndex >= availableExpenseMonths.length - 1 : month >= latestDashboardMonth} aria-label="Mese successivo"><ChevronRight size={17}/></button>
             </div> : <input aria-label="Mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>} 
             {selectedAccount && <a className="header-account-settings" href={`/configurazione/conti/${selectedAccount.id}`}><Settings size={16}/> Impostazioni conto</a>}
@@ -446,8 +449,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                   lockedAccount={!!bankImport}
                   reject={() => { setBankImport(null); setImportOpen(false); }}
                   done={async (m) => {
-                    const balance = bankImport?.balance ? ` Saldo banca: ${eur.format(bankImport.balance.amount)}.` : "";
-                    setMessage(`${m}${balance}`);
+                    setMessage(m);
                     setImportOpen(false);
                     setBankImport(null);
                     await load();
@@ -503,7 +505,9 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                 <strong>{eur.format(balance)}</strong>
                 <small>
                   {accountFilter === "all"
-                    ? `su ${accounts.length} ${accounts.length === 1 ? "conto" : "conti"}`
+                    ? locale === "en"
+                      ? `across ${accounts.length} ${accounts.length === 1 ? "account" : "accounts"}`
+                      : `su ${accounts.length} ${accounts.length === 1 ? "conto" : "conti"}`
                     : viewAccounts[0]?.name}
                 </small>
               </article>
@@ -630,7 +634,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                             </TableCell>}
                             <TableCell data-label="Categoria" className="transaction-category-cell">
                               <select className="inline-category-select" value={t.category} disabled={savingCategoryIds.has(t.id)} onChange={(event) => changeTransactionCategory(t, event.target.value)} aria-label={`Categoria di ${t.description}`}>
-                                {categories.map((category) => <option value={category.name} key={category.id}>{category.name}</option>)}
+                                {categories.map((category) => <option data-no-translate value={category.name} key={category.id}>{translateDefaultCategory(category.name, locale)}</option>)}
                               </select>
                             </TableCell>
                             <TableCell
@@ -649,7 +653,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                     </Table>
                   ) : current.length ? <div className="empty">Nessun movimento corrisponde alla ricerca.</div> : (
                     <div className="empty">
-                      Nessun movimento nel periodo {formatPeriod(period)}.
+                      Nessun movimento nel periodo {formatPeriod(period, locale)}.
                       Aggiungine uno o importa l’estratto conto.
                     </div>
                   )}
@@ -706,6 +710,7 @@ function TxForm({
   post,
   done,
 }: any) {
+  const { locale } = useLocale();
   const [localCategories, setLocalCategories] = useState<Category[]>(categories);
   const [f, setF] = useState({
       accountId: initial ? String(initial.accountId) : defaultAccountId,
@@ -770,7 +775,7 @@ function TxForm({
           }}
         >
           <SelectTrigger>
-            <SelectValue placeholder="Seleziona" />
+            <SelectValue placeholder={locale === "en" ? "Select" : "Seleziona"} />
           </SelectTrigger>
           <SelectContent>
             {accounts.map((a: Account) => (
@@ -837,7 +842,7 @@ function TxForm({
           onChange={(e) => setF({ ...f, category: e.target.value })}
         >
           {localCategories.map((c: Category) => (
-            <option key={c.id}>{c.name}</option>
+            <option data-no-translate value={c.name} key={c.id}>{translateDefaultCategory(c.name, locale)}</option>
           ))}
         </select>
         <button type="button" className="new-category-inline" onClick={async()=>{const name=prompt("Nome della nuova categoria");if(!name?.trim())return;const r=await post({action:"category",name:name.trim(),color:"#4e8d7c"});if(r.error){setError(r.error);return}setLocalCategories([...localCategories,r.row]);setF({...f,category:r.row.name})}}>
@@ -890,15 +895,17 @@ function CategorySpendingPanel({ transactions, categories }: { transactions: Tx[
 }
 
 function CategorySpending({ transactions, categories }: { transactions: Tx[]; categories: Category[] }) {
+  const { locale } = useLocale();
   const knownColors = new Map(categories.map((category) => [category.name, category.color]));
   const totals = new Map<string, number>();
   transactions.filter((transaction) => transaction.amount < 0).forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + Math.abs(transaction.amount)));
   const data = Array.from(totals, ([name, value]) => ({ name, value, color: knownColors.get(name) || "#7b837e" })).sort((left, right) => right.value - left.value);
   if (!data.length) return <p className="muted">Nessuna spesa nel periodo selezionato.</p>;
-  return <div className="category-spending-scroll" tabIndex={0} aria-label="Spese per categoria, scorri verticalmente per vederle tutte">{data.map((category) => <div className="category category-spending-card" key={category.name}><span><i style={{ background: category.color }}/>{category.name}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${(category.value / data[0].value) * 100}%`, background: category.color }}/></div></div>)}</div>;
+  return <div className="category-spending-scroll" tabIndex={0} aria-label="Spese per categoria, scorri verticalmente per vederle tutte">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${(category.value / data[0].value) * 100}%`, background: category.color }}/></div></div>)}</div>;
 }
 
 function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
+  const { locale } = useLocale();
   const selectedPeriod = dashboardPeriod(month, account);
   const today = new Date().toISOString().slice(0, 10);
   const isCurrentPeriod = today >= selectedPeriod.start && today <= selectedPeriod.end;
@@ -909,7 +916,7 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
     <section className="weekly-summary weekly-summary-four compact-weekly-summary">
       {isCurrentPeriod ? <>
         <article className="current-week-balance"><span>Saldo settimana corrente</span><strong>{eur.format(currentWeek?.remaining ?? 0)}</strong><small>Resta per la settimana{currentWeek ? ` · ${currentWeek.label}` : ""}</small></article>
-        <article><span>Saldo attuale sul conto</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} iniziali + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
+        <article><span>Saldo attuale sul conto</span><strong>{eur.format(data.closing)}</strong><small>{locale === "en" ? `${eur.format(data.opening)} opening balance + ${eur.format(data.income)} income − ${eur.format(data.spent)} outgoings` : `${eur.format(data.opening)} iniziali + ${eur.format(data.income)} entrate − ${eur.format(data.spent)} uscite`}</small></article>
         <article><span>Saldo previsto sul conto</span><strong>{eur.format(data.remaining)}</strong><small>Considerando {eur.format(reserved)} di spese fisse non pagate</small></article>
         <article><span>Disponibile nel periodo</span><strong>{eur.format(data.pool)}</strong><small>Dal primo venerdì al giovedì finale</small></article>
         <article><span>Speso fino ad ora</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
@@ -917,7 +924,7 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
         <article className="accent"><span>Saldo del periodo</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} residui + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
         <article><span>Entrate del periodo</span><strong>{eur.format(data.opening + data.income)}</strong><small>{eur.format(data.income)} entrate + {eur.format(data.opening)} rimasti dal periodo precedente</small></article>
         <article><span>Uscite del periodo</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
-        <article><span>Movimenti del periodo</span><strong>{data.transactionCount}</strong><small>Solo dal {formatPeriod(selectedPeriod)}</small></article>
+        <article><span>Movimenti del periodo</span><strong>{data.transactionCount}</strong><small>Solo dal {formatPeriod(selectedPeriod, locale)}</small></article>
       </>}
     </section>
     <section className="weeks-grid home-weeks-grid">
@@ -941,6 +948,7 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
 }
 
 function PersonalOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
+  const { locale } = useLocale();
   const months = useMemo(() => closingBalances(transactions, 7, month, account), [transactions, month, account]);
   const selectedPeriod = dashboardPeriod(month, account);
   const today = new Date().toISOString().slice(0, 10);
@@ -952,9 +960,9 @@ function PersonalOverview({ account, transactions, month, fixedExpenses, categor
   const savingDelta = current - previous - reserved;
   return <>
     <section className="metric-grid personal-metric-grid">
-      <article className="metric"><span>Saldo reale attuale</span><strong>{eur.format(current)}</strong><small>Senza sottrarre le spese fisse da pagare</small></article>
+      <article className="metric"><span>Saldo reale attuale</span><strong>{eur.format(current)}</strong><small>{locale === "en" ? "Before deducting fixed expenses still due" : "Senza sottrarre le spese fisse da pagare"}</small></article>
       <article className="metric hero-metric"><span>Effettivamente spendibile</span><strong>{eur.format(current - reserved)}</strong><small>{eur.format(reserved)} riservati per spese fisse</small></article>
-      <article className="metric"><span>{savingLabel}</span><strong className={savingDelta >= 0 ? "positive" : "negative"}>{eur.format(savingDelta)}</strong><small>{isCurrentPeriod ? `Delta previsto, al netto di ${eur.format(reserved)} ancora da pagare` : "Delta rispetto al saldo del mese precedente"}</small></article>
+      <article className="metric"><span>{savingLabel}</span><strong className={savingDelta >= 0 ? "positive" : "negative"}>{eur.format(savingDelta)}</strong><small>{isCurrentPeriod ? (locale === "en" ? `Forecast change after deducting ${eur.format(reserved)} still due` : `Delta previsto, al netto di ${eur.format(reserved)} ancora da pagare`) : (locale === "en" ? "Change from the previous month's balance" : "Delta rispetto al saldo del mese precedente")}</small></article>
       <article className="metric"><span>Media risparmio mensile</span><strong>{eur.format(months.slice(1).reduce((sum, item, index) => sum + item.balance - months[index].balance, 0) / Math.max(1, months.length - 1))}</strong><small>Ultimi sei intervalli mensili</small></article>
     </section>
     <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Saldo residuo</p><h2>Andamento e risparmio mensile</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:6,left:0,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>compactEur.format(value)} tickLine={false} axisLine={false} width={66}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:4,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
@@ -1020,8 +1028,8 @@ function movementCycleMonth(dateValue: string, account: Account) {
   return accountCycleMonth(dateValue, account.type);
 }
 
-function formatPeriod(period: { start: string; end: string }) {
-  const format = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short" });
+function formatPeriod(period: { start: string; end: string }, locale: "it" | "en") {
+  const format = new Intl.DateTimeFormat(locale === "en" ? "en-GB" : "it-IT", { day: "numeric", month: "short" });
   return `${format.format(new Date(`${period.start}T12:00:00`))} – ${format.format(new Date(`${period.end}T12:00:00`))}`;
 }
 
@@ -1108,6 +1116,7 @@ function transactionAmountSearchValues(amount: number) {
 }
 
 function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses = [], history, post, done, reject, initialRows = [], source = "import", lockedAccount = false }: any) {
+  const { locale } = useLocale();
   const [accountId, setAccountId] = useState(defaultAccountId),
     [localCategories, setLocalCategories] = useState<Category[]>(categories),
     [rows, setRows] = useState<any[]>(initialRows),
@@ -1139,7 +1148,9 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
         })
         : source === "enable_banking" && !externalIdMatch
           ? existingAccountTransactions.find((transaction: Tx) => {
-            return Number(transaction.amount) === Number(row.amount) && sameTransactionDescription(transaction, row);
+            return transaction.date === row.date &&
+              Number(transaction.amount) === Number(row.amount) &&
+              transactionSimilarity(transaction, row) >= 0.6;
           })
           : undefined;
       const sameFileMatch = source === "import" ? rows.slice(0, index).find((transaction: Tx) =>
@@ -1206,7 +1217,7 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
             disabled={lockedAccount}
             onChange={(e) => setAccountId(e.target.value)}
           >
-            <option value="">Seleziona un conto</option>
+            <option value="">{locale === "en" ? "Select an account" : "Seleziona un conto"}</option>
             {accounts.map((a: Account) => (
               <option value={a.id} key={a.id}>
                 {a.name}
@@ -1229,7 +1240,7 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
         {rows.length > 0 && (
           <div className="import-preview">
             <div className="preview-summary">
-              <div><b>{rows.length} movimenti riconosciuti</b><small><strong>{importCount}</strong> da importare{duplicateCount > 0 && <> · <strong>{duplicateCount}</strong> duplicati esclusi</>}</small></div>
+              <div><b>{rows.length} {locale === "en" ? (rows.length === 1 ? "transaction recognized" : "transactions recognized") : (rows.length === 1 ? "movimento riconosciuto" : "movimenti riconosciuti")}</b><small><strong>{importCount}</strong> {locale === "en" ? "to import" : "da importare"}{duplicateCount > 0 && <> · <strong>{duplicateCount}</strong> {locale === "en" ? (duplicateCount === 1 ? "duplicate excluded" : "duplicates excluded") : (duplicateCount === 1 ? "duplicato escluso" : "duplicati esclusi")}</>}</small></div>
               <Button type="button" variant="outline" onClick={async () => {
                 const name = prompt("Nome della nuova categoria");
                 if (!name?.trim()) return;
@@ -1267,7 +1278,7 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
                         return index === r.index || sameExpense ? { ...item, category, categoryEdited: true } : item;
                       }));
                     }}>
-                      {localCategories.map((category: Category) => <option key={category.id} value={category.name}>{category.name}</option>)}
+                      {localCategories.map((category: Category) => <option data-no-translate key={category.id} value={category.name}>{translateDefaultCategory(category.name, locale)}</option>)}
                     </select>
                   </label>
                   <span className="import-status">{r.exclude ? "Escluso" : r.updateMatch?.autoUpdate ? "Sarà aggiornato con i nuovi dettagli" : r.updateMatch && !r.confirmUpdate ? "Aggiornamento disponibile" : r.willImport ? (r.confirmUpdate ? "Sarà aggiornato" : "Sarà importato") : "Duplicato"}</span>
@@ -1357,10 +1368,16 @@ function buildImportUpdate(transaction: Tx, incoming: { date: string; amount: nu
   const incomingDetails = typeof incoming.details === "string" ? incoming.details.trim() || null : null;
   const existingScore = normalizedDescription(transaction.description).length + normalizedDescription(transaction.details || "").length;
   const incomingScore = normalizedDescription(incomingDescription).length + normalizedDescription(incomingDetails || "").length;
+  // A description already split into summary + details is more structured than
+  // a single long bank description, even when the latter contains more chars.
   const useIncomingDescription = Boolean(
-    incomingDetails
-      ? incomingScore > existingScore || !transaction.details
-      : incomingScore > existingScore,
+    preserveCore && transaction.details
+      ? false
+      : transaction.details && !incomingDetails
+      ? false
+      : incomingDetails
+        ? incomingScore > existingScore || !transaction.details
+        : incomingScore > existingScore,
   );
   const nextDescription = useIncomingDescription ? incomingDescription : transaction.description;
   const nextDetails = useIncomingDescription ? incomingDetails : transaction.details || null;

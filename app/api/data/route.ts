@@ -96,7 +96,14 @@ const importDescriptionUpdate = (
   const incomingDetails = typeof incoming.details === "string" ? incoming.details.trim() || null : null;
   const existingScore = normalizedImportDescription(existing.description).length + normalizedImportDescription(existing.details || "").length;
   const incomingScore = normalizedImportDescription(incomingDescription).length + normalizedImportDescription(incomingDetails || "").length;
-  const useIncoming = incomingDetails ? incomingScore > existingScore || !existing.details : incomingScore > existingScore;
+  const existingIsStructuredMatch = Boolean(existing.details && transactionSimilarity(existing, incoming) >= 0.6);
+  // Preserve a semantically equivalent summary + details pair regardless of
+  // whether the incoming movement comes from CSV/XLSX or Enable Banking.
+  const useIncoming = existingIsStructuredMatch
+    ? false
+    : incomingDetails
+      ? incomingScore > existingScore || !existing.details
+      : incomingScore > existingScore;
   return {
     description: useIncoming ? incomingDescription : existing.description,
     details: useIncoming ? incomingDetails : existing.details || null,
@@ -891,7 +898,7 @@ export async function POST(request: Request) {
       const externalTransactionId = importSource === "enable_banking" && typeof item.externalTransactionId === "string"
         ? item.externalTransactionId.trim().slice(0, 500) || null
         : null;
-      if (item.categoryEdited === true && amount < 0) {
+      if (item.categoryEdited === true && item.confirmUpdate !== true && amount < 0) {
         const similarIds = existingTransactions
           .filter((transaction) => transaction.amount < 0 && sameTransactionDescription(transaction, { description: String(item.description), details: typeof item.details === "string" ? item.details : null }))
           .map((transaction) => transaction.id);
@@ -913,16 +920,20 @@ export async function POST(request: Request) {
         const isExternalUpdate = Boolean(externalTransactionId && existingMatch?.source === "enable_banking" && existingMatch.externalTransactionId === externalTransactionId);
         const dayDistance = existingMatch ? calendarDayDistance(existingMatch.date, String(item.date)) : Infinity;
         const isFileEnrichment = Boolean(importSource === "import" && existingMatch && Number(existingMatch.amount) === amount && dayDistance <= 2 && transactionSimilarity(existingMatch, incomingDescription) >= (dayDistance === 0 ? 0.6 : 0.8));
-        if (!existingMatch || (!isExternalUpdate && !isFileEnrichment)) {
+        const isEnableBankingEnrichment = Boolean(importSource === "enable_banking" && existingMatch &&
+          existingMatch.date === String(item.date) && Number(existingMatch.amount) === amount &&
+          transactionSimilarity(existingMatch, incomingDescription) >= 0.6);
+        if (!existingMatch || (!isExternalUpdate && !isFileEnrichment && !isEnableBankingEnrichment)) {
           return Response.json({ error: "Il movimento selezionato per l’aggiornamento non è più disponibile o non corrisponde." }, { status: 409 });
         }
         const updatedDescription = importDescriptionUpdate(existingMatch, incomingDescription);
-        const updatedDate = isFileEnrichment ? existingMatch.date : String(item.date);
-        const updatedAmount = isFileEnrichment ? Number(existingMatch.amount) : amount;
+        const preserveExistingCore = isFileEnrichment || isEnableBankingEnrichment;
+        const updatedDate = preserveExistingCore ? existingMatch.date : String(item.date);
+        const updatedAmount = preserveExistingCore ? Number(existingMatch.amount) : amount;
         const updatedFingerprint = fingerprint(accountId, updatedDate, updatedDescription.details || updatedDescription.description, updatedAmount);
         try {
           await db.batch([
-            db.update(transactions).set({ date: updatedDate, amount: updatedAmount, description: updatedDescription.description, details: updatedDescription.details, fingerprint: updatedFingerprint }).where(and(eq(transactions.id, existingMatch.id), eq(transactions.ownerEmail, user.email))),
+            db.update(transactions).set({ date: updatedDate, amount: updatedAmount, description: updatedDescription.description, details: updatedDescription.details, category: existingMatch.category, fingerprint: updatedFingerprint }).where(and(eq(transactions.id, existingMatch.id), eq(transactions.ownerEmail, user.email))),
             db.update(fixedExpensePayments).set({ month: accountCycleMonth(updatedDate, own[0].type) }).where(and(eq(fixedExpensePayments.transactionId, existingMatch.id), eq(fixedExpensePayments.ownerEmail, user.email))),
           ]);
           reconciled++;
@@ -944,9 +955,9 @@ export async function POST(request: Request) {
           transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6,
         )
         : importSource === "enable_banking" && (existingTransactions.some((transaction) =>
-          Number(transaction.amount) === amount && sameTransactionDescription(transaction, incomingText)
+          transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6
         ) || currentImportedTransactions.some((transaction) =>
-          Number(transaction.amount) === amount && sameTransactionDescription(transaction, incomingText)
+          transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6
         ));
       const matchesExisting = Boolean(matchesExternalId || matchesImportedFile);
       if ((matchesExisting || (externalTransactionId && currentExternalTransactionIds.has(externalTransactionId))) && item.force !== true) {

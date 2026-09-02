@@ -4,12 +4,14 @@ import { createContext, useContext, useEffect } from "react";
 import { LOCALE_COOKIE, Locale, locales, MessageKey, message, translateItalianText } from "@/lib/i18n";
 
 const LocaleContext = createContext({ locale: "it" as Locale, setLocale: (_locale: Locale) => {}, t: (key: MessageKey) => message("it", key) });
-const translatedAttributes = ["placeholder", "title", "aria-label"];
+const translatedAttributes = ["placeholder", "title", "aria-label", "alt", "data-label"];
 
 export function LocaleProvider({ locale, children }: { locale: Locale; children: React.ReactNode }) {
   useEffect(() => {
     if (locale !== "en") return;
     const translateNode = (root: Node) => {
+      const element = root instanceof Element ? root : root.parentElement;
+      if (element?.closest("[data-no-translate]")) return;
       if (root.nodeType === Node.TEXT_NODE && root.textContent) {
         const translated = translateItalianText(root.textContent, locale);
         if (translated !== root.textContent) root.textContent = translated;

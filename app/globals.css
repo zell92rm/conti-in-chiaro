@@ -162,6 +162,19 @@ body {
 .privacy-note small {
   color: #9fb3aa;
 }
+.privacy-links {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.privacy-links a {
+  color: #c7d6cf;
+  text-decoration: none;
+}
+.privacy-links a:hover {
+  color: #fff;
+  text-decoration: underline;
+}
 
 .logout-button {
   align-items: center;

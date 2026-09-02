@@ -5,9 +5,11 @@ import { ArrowLeft, Pencil, Plus, Search, Settings, Trash2, WalletCards, X } fro
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { TransactionDescription } from "@/components/transaction-description";
+import { useLocale } from "@/components/locale-provider";
 import AccountOpenBankingSettings from "./account-open-banking-settings";
 import { accountCycleMonth } from "@/lib/account-period";
 import { normalizeKeyword } from "@/lib/keyword-policy";
+import { translateDefaultCategory } from "@/lib/i18n";
 
 type Account = { id: number; name: string; type: string };
 type Category = { id: number; name: string };
@@ -17,6 +19,7 @@ const currentMonth = (type = "personale") => accountCycleMonth(new Date().toISOS
 const formatDate = (value: string) => new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`));
 
 export default function AccountSettings({ accountId }: { accountId: number }) {
+  const { locale } = useLocale();
   const [account, setAccount] = useState<Account | null>(null), [categories, setCategories] = useState<Category[]>([]), [expenses, setExpenses] = useState<FixedExpense[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState("");
   const [searchingId, setSearchingId] = useState<number | null>(null), [searchExpense, setSearchExpense] = useState<FixedExpense | null>(null), [matches, setMatches] = useState<Match[]>([]);
   const [editingExpense, setEditingExpense] = useState<FixedExpense | null>(null);
@@ -64,6 +67,7 @@ function FixedExpenseForm({ categories, save, initial }: { categories: Category[
 }
 
 function FixedExpenseEditor({ categories, save, initial }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense }) {
+  const { locale } = useLocale();
   const [name, setName] = useState(initial?.name || "");
   const [amount, setAmount] = useState(initial ? initial.amount.toFixed(2) : "");
   const [category, setCategory] = useState(initial?.category || "");
@@ -96,7 +100,7 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
   }}>
     <label className="field"><span>Nome</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="Es. Affitto"/></label>
     <label className="field"><span>Importo previsto</span><input required type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)}/></label>
-    <label className="field"><span>Categoria (facoltativa)</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">Qualsiasi categoria</option>{categories.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
+    <label className="field"><span>Categoria (facoltativa)</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">Qualsiasi categoria</option>{categories.map((item) => <option data-no-translate value={item.name} key={item.id}>{translateDefaultCategory(item.name, locale)}</option>)}</select></label>
     <fieldset className="keyword-field">
       <legend>Parole chiave (facoltative)</legend>
       <p>Nome e parole chiave vengono cercati nella descrizione e nel dettaglio del movimento.</p>
