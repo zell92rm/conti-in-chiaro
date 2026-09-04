@@ -505,6 +505,7 @@ export async function POST(request: Request) {
       ownerEmail: user.email,
       accountId,
       name: String(body.name).trim(),
+      notes: String(body.notes || "").trim().slice(0, 2000) || null,
       category: String(body.category || "").trim() || null,
       keywords: JSON.stringify(validation.keywords),
       amount,
@@ -525,8 +526,8 @@ export async function POST(request: Request) {
     if (!name || !Number.isFinite(amount) || amount <= 0) return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
     const validation = await validateManualKeywords(user.email, "fixed_expense", id, body.keywords);
     if (validation.error) return Response.json({ error: validation.error }, { status: 409 });
-    const category = String(body.category || "").trim() || null, keywords = JSON.stringify(validation.keywords);
-    await db.update(fixedExpenses).set({ name, amount, category, keywords }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
+    const category = String(body.category || "").trim() || null, notes = String(body.notes || "").trim().slice(0, 2000) || null, keywords = JSON.stringify(validation.keywords);
+    await db.update(fixedExpenses).set({ name, notes, amount, category, keywords }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
     await db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.fixedExpenseId, id)));
     if (validation.keywords.length) await db.insert(fixedExpenseKeywordSources).values(validation.keywords.map((keyword) => ({ ownerEmail: user.email, fixedExpenseId: id, keyword, source: "manual" }))).onConflictDoNothing();
     return Response.json({ ok: true });
@@ -923,17 +924,22 @@ export async function POST(request: Request) {
         const isEnableBankingEnrichment = Boolean(importSource === "enable_banking" && existingMatch &&
           existingMatch.date === String(item.date) && Number(existingMatch.amount) === amount &&
           transactionSimilarity(existingMatch, incomingDescription) >= 0.6);
-        if (!existingMatch || (!isExternalUpdate && !isFileEnrichment && !isEnableBankingEnrichment)) {
+        const isPotentialDuplicateUpdate = Boolean(item.potentialDuplicateUpdate === true && existingMatch &&
+          existingMatch.date === String(item.date) && Number(existingMatch.amount) === amount &&
+          transactionSimilarity(existingMatch, incomingDescription) >= 0.3 && transactionSimilarity(existingMatch, incomingDescription) < 0.6);
+        if (!existingMatch || (!isExternalUpdate && !isFileEnrichment && !isEnableBankingEnrichment && !isPotentialDuplicateUpdate)) {
           return Response.json({ error: "Il movimento selezionato per l’aggiornamento non è più disponibile o non corrisponde." }, { status: 409 });
         }
-        const updatedDescription = importDescriptionUpdate(existingMatch, incomingDescription);
-        const preserveExistingCore = isFileEnrichment || isEnableBankingEnrichment;
+        const updatedDescription = isPotentialDuplicateUpdate
+          ? { description: incomingDescription.description.trim(), details: incomingDescription.details?.trim() || null }
+          : importDescriptionUpdate(existingMatch, incomingDescription);
+        const preserveExistingCore = isFileEnrichment || isEnableBankingEnrichment || isPotentialDuplicateUpdate;
         const updatedDate = preserveExistingCore ? existingMatch.date : String(item.date);
         const updatedAmount = preserveExistingCore ? Number(existingMatch.amount) : amount;
         const updatedFingerprint = fingerprint(accountId, updatedDate, updatedDescription.details || updatedDescription.description, updatedAmount);
         try {
           await db.batch([
-            db.update(transactions).set({ date: updatedDate, amount: updatedAmount, description: updatedDescription.description, details: updatedDescription.details, category: existingMatch.category, fingerprint: updatedFingerprint }).where(and(eq(transactions.id, existingMatch.id), eq(transactions.ownerEmail, user.email))),
+            db.update(transactions).set({ date: updatedDate, amount: updatedAmount, description: updatedDescription.description, details: updatedDescription.details, category: isPotentialDuplicateUpdate ? item.category || existingMatch.category : existingMatch.category, fingerprint: updatedFingerprint }).where(and(eq(transactions.id, existingMatch.id), eq(transactions.ownerEmail, user.email))),
             db.update(fixedExpensePayments).set({ month: accountCycleMonth(updatedDate, own[0].type) }).where(and(eq(fixedExpensePayments.transactionId, existingMatch.id), eq(fixedExpensePayments.ownerEmail, user.email))),
           ]);
           reconciled++;

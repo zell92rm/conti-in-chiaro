@@ -93,7 +93,7 @@ Il server locale usa HTTPS con un certificato autofirmato. Il browser può mostr
 
 ### Database e migrazioni
 
-Lo schema è in `db/schema.ts` e le migrazioni SQL in `drizzle/`. Il binding applicativo D1 è `DB`.
+Lo schema è in `src/db/schema.ts` e le migrazioni SQL in `drizzle/`. Il binding applicativo D1 è `DB`.
 
 `.deployment/hosting.json` dichiara il binding logico usato dalla build. `wrangler.d1.jsonc` è riservato alle migrazioni e non deve essere usato per il deploy del Worker.
 
@@ -157,17 +157,17 @@ Dopo il deploy verificare:
 ### Struttura
 
 ```text
-app/                         Pagine, dashboard e route API
-app/api/open-banking/        Configurazione e sincronizzazione Enable Banking
-app/configurazione/          Impostazioni generali e dei conti
-components/                  Componenti condivisi
-db/schema.ts                 Schema Drizzle per D1
+src/app/                     Pagine, dashboard e route API
+src/app/api/open-banking/    Configurazione e sincronizzazione Enable Banking
+src/app/configurazione/      Impostazioni generali e dei conti
+src/components/              Componenti condivisi
+src/db/schema.ts             Schema Drizzle per D1
 drizzle/                     Migrazioni SQL
-hooks/                       Hook React condivisi
-lib/                         Periodi, crittografia e client bancario
+src/hooks/                   Hook React condivisi
+src/lib/                     Periodi, crittografia e client bancario
 scripts/                     Script di build e ambiente
 tests/                       Test automatici
-worker/index.ts              Entry point Cloudflare Worker
+src/worker/index.ts          Entry point Cloudflare Worker
 wrangler.jsonc               Configurazione build e deploy
 wrangler.d1.jsonc            Configurazione delle sole migrazioni D1
 ```
@@ -274,7 +274,7 @@ The local server uses HTTPS with a self-signed certificate. The browser may disp
 
 ### Database and migrations
 
-The schema is located in `db/schema.ts`, and SQL migrations are stored in `drizzle/`. The application D1 binding is `DB`.
+The schema is located in `src/db/schema.ts`, and SQL migrations are stored in `drizzle/`. The application D1 binding is `DB`.
 
 `.deployment/hosting.json` declares the logical build binding. `wrangler.d1.jsonc` is migration-only and must not be used to deploy the Worker.
 
@@ -338,17 +338,17 @@ After deployment, verify:
 ### Project structure
 
 ```text
-app/                         Pages, dashboards, and API routes
-app/api/open-banking/        Enable Banking configuration and synchronization
-app/configurazione/          General and account-specific settings
-components/                  Shared components
-db/schema.ts                 Drizzle schema for D1
+src/app/                     Pages, dashboards, and API routes
+src/app/api/open-banking/    Enable Banking configuration and synchronization
+src/app/configurazione/      General and account-specific settings
+src/components/              Shared components
+src/db/schema.ts             Drizzle schema for D1
 drizzle/                     SQL migrations
-hooks/                       Shared React hooks
-lib/                         Periods, cryptography, and banking client
+src/hooks/                   Shared React hooks
+src/lib/                     Periods, cryptography, and banking client
 scripts/                     Build and environment scripts
 tests/                       Automated tests
-worker/index.ts              Cloudflare Worker entry point
+src/worker/index.ts          Cloudflare Worker entry point
 wrangler.jsonc               Build and deployment configuration
 wrangler.d1.jsonc            D1 migration-only configuration
 ```

@@ -155,6 +155,7 @@ export const fixedExpenses = sqliteTable("fixed_expenses", {
   ownerEmail: text("owner_email").notNull(),
   accountId: integer("account_id").notNull(),
   name: text("name").notNull(),
+  notes: text("notes"),
   category: text("category"),
   keywords: text("keywords").notNull().default("[]"),
   amount: real("amount").notNull(),

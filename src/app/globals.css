@@ -878,9 +878,11 @@ button {
   font-weight: 700;
 }
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
 }
+.field textarea { min-height: 76px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--ink); font: inherit; resize: vertical; }
 .dialog-copy {
   color: var(--muted);
   font-size: 13px;
@@ -1166,6 +1168,7 @@ button {
 .fixed-expense-main { display: grid; gap: 4px; min-width: 0; }
 .fixed-expense-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fixed-expense-main small { color: var(--muted); font-size: 12px; }
+.fixed-expense-notes { margin: 2px 0 0; color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .fixed-expense-amount { font-size: 16px; font-variant-numeric: tabular-nums; }
 .fixed-expense-status { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
 .fixed-expense-status.paid { background: #e3f1e9; color: #28664f; }
@@ -1752,6 +1755,36 @@ button {
   background: #e9e6de;
   color: #77736b;
 }
+.preview-table > div.potential-duplicate-row {
+  border-color: #e2b75f;
+  background: #fff8e8;
+}
+.potential-duplicate-row .import-status { color: #8a5a00; }
+.potential-duplicate-alert {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f8e6b8;
+  color: #704900;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.potential-duplicate-alert > span { color: #805f1f; }
+.potential-duplicate-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.potential-duplicate-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-weight: 650;
+}
+.potential-duplicate-actions input { accent-color: var(--green); }
 .preview-table b {
   white-space: nowrap;
   overflow: hidden;

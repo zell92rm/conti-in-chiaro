@@ -59,6 +59,7 @@ const englishReplacements: Array<readonly [string, string]> = [
     ["Escluso", "Excluded"], ["Sarà aggiornato con i nuovi dettagli", "Will be updated with the new details"],
     ["Aggiornamento disponibile", "Update available"], ["Sarà aggiornato", "Will be updated"], ["Sarà importato", "Will be imported"],
     ["Conferma aggiornamento", "Confirm update"], ["Conferma spesa fissa", "Confirm fixed expense"], ["Importa comunque", "Import anyway"],
+    ["Note (facoltative)", "Notes (optional)"], ["Aggiungi dettagli utili sulla spesa fissa", "Add useful details about the fixed expense"],
     ["Nessun movimento in questo filtro.", "No transactions in this filter."],
     ["I movimenti evidenziati saranno importati. Puoi escludere quelli che non vuoi salvare; i duplicati restano esclusi salvo “Importa comunque”.", "Highlighted transactions will be imported. You can exclude any you do not want to save; duplicates remain excluded unless you select ‘Import anyway’."],
     ["movimento", "transaction"], ["movimenti", "transactions"], ["Eliminare il movimento", "Delete transaction"], ["Movimento eliminato.", "Transaction deleted."], ["Movimento aggiornato", "Transaction updated"],
@@ -120,6 +121,9 @@ const englishReplacements: Array<readonly [string, string]> = [
     ["Scegli l’estratto conto", "Choose the bank statement"], ["CSV o XLSX, prima riga con intestazioni", "CSV or XLSX with headers in the first row"],
     ["movimenti riconosciuti", "transactions recognized"], ["da importare", "to import"], ["duplicati esclusi", "duplicates excluded"],
     ["Filtra movimenti dell'importazione", "Filter imported transactions"], ["Non importare questo movimento", "Do not import this transaction"],
+    ["Potenziali duplicati", "Potential duplicates"], ["Potenziale duplicato: stessa data e stesso importo, con alcune parole in comune. Il movimento verrà comunque importato.", "Potential duplicate: same date and amount, with some words in common. The transaction will still be imported."],
+    ["Potenziale duplicato di:", "Potential duplicate of:"], ["Importa come nuovo", "Import as new"], ["Escludi", "Exclude"], ["Aggiorna esistente", "Update existing"],
+    ["Sarà escluso", "Will be excluded"], ["Aggiornerà l’esistente", "Will update the existing transaction"], ["Sarà importato come nuovo", "Will be imported as new"],
     ["Rifiuta importazione", "Reject import"], ["Nome della nuova categoria", "New category name"],
   ] as Array<readonly [string, string]>,
 ].sort((left, right) => right[0].length - left[0].length);

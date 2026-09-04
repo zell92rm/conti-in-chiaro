@@ -72,7 +72,7 @@ type Tx = {
   fixedExpenseId?: number | null;
 };
 type Category = { id: number; name: string; color: string; keywords?: string[] };
-type FixedExpense = { id:number; accountId:number; name:string; category:string|null; keywords:string[]; amount:number; active:boolean; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
+type FixedExpense = { id:number; accountId:number; name:string; notes?:string|null; category:string|null; keywords:string[]; amount:number; active:boolean; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
 const eur = new Intl.NumberFormat("it-IT", {
   style: "currency",
   currency: "EUR",
@@ -907,11 +907,13 @@ function CategorySpending({ transactions, categories }: { transactions: Tx[]; ca
 function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
   const { locale } = useLocale();
   const selectedPeriod = dashboardPeriod(month, account);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey(new Date());
   const isCurrentPeriod = today >= selectedPeriod.start && today <= selectedPeriod.end;
   const reserved = isCurrentPeriod ? unpaidFixedTotal(fixedExpenses, account.id, month) : 0;
   const data = useMemo(() => calculateWeeks(transactions, month, reserved), [transactions, month, reserved]);
-  const currentWeek = data.weeks.find((week) => week.current);
+  const elapsedPeriodDays = Math.floor((Date.parse(`${today}T12:00:00`) - Date.parse(`${selectedPeriod.start}T12:00:00`)) / 86400000);
+  const currentWeekIndex = isCurrentPeriod ? Math.min(data.weeks.length - 1, Math.max(0, Math.floor(elapsedPeriodDays / 7))) : -1;
+  const currentWeek = currentWeekIndex >= 0 ? data.weeks[currentWeekIndex] : undefined;
   return <>
     <section className="weekly-summary weekly-summary-four compact-weekly-summary">
       {isCurrentPeriod ? <>
@@ -928,8 +930,8 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
       </>}
     </section>
     <section className="weeks-grid home-weeks-grid">
-      {data.weeks.map((week) => <article className={`week-card ${week.current ? "current" : ""}`} key={week.start}>
-        <div className="week-top"><div><small>SETTIMANA {week.index + 1}</small><h2>{week.label}</h2></div>{week.current && <b>In corso</b>}</div>
+      {data.weeks.map((week) => <article className={`week-card ${week.index === currentWeekIndex ? "current" : ""}`} key={week.start}>
+        <div className="week-top"><div><small>SETTIMANA {week.index + 1}</small><h2>{week.label}</h2></div>{week.index === currentWeekIndex && <b>In corso</b>}</div>
         <div className="week-numbers">
           <span><small>Disponibile</small><strong>{eur.format(week.available)}</strong></span>
           <span><small>Speso</small><strong className={week.spent > week.available ? "negative" : ""}>{eur.format(week.spent)}</strong></span>
@@ -1007,6 +1009,10 @@ function dashboardPeriod(month: string, account: Account | null) {
   return accountPeriodBounds(month, account?.type || "risparmi");
 }
 
+function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function cycleStartFriday(monthStart: Date) {
   const nextFriday = new Date(monthStart);
   nextFriday.setDate(monthStart.getDate() + ((5 - monthStart.getDay() + 7) % 7));
@@ -1036,8 +1042,8 @@ function formatPeriod(period: { start: string; end: string }, locale: "it" | "en
 function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
   const monthStart = new Date(`${month}-01T12:00:00`);
   const { start: firstFriday, end: cycleEnd } = monthlyCycleBounds(monthStart);
-  const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  const startKey = dateKey(firstFriday), endKey = dateKey(cycleEnd);
+  const today = localDateKey(new Date());
+  const startKey = localDateKey(firstFriday), endKey = localDateKey(cycleEnd);
   const opening = transactions.filter((item) => item.date < startKey).reduce((sum, item) => sum + item.amount, 0);
   const rows = transactions.filter((item) => item.date >= startKey && item.date <= endKey);
   const incomes = rows.filter((item) => item.amount > 0);
@@ -1052,7 +1058,7 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
   let carry = 0;
   for (let cursor = new Date(firstFriday); cursor <= cycleEnd; cursor.setDate(cursor.getDate() + 7)) {
     const start = new Date(cursor), finish = new Date(cursor); finish.setDate(finish.getDate() + 6);
-    const weekStart = dateKey(start), weekEnd = dateKey(finish);
+    const weekStart = localDateKey(start), weekEnd = localDateKey(finish);
     const weekIncome = incomes.filter((item) => item.date >= weekStart && item.date <= weekEnd).reduce((sum, item) => sum + item.amount, 0);
     const weekSpent = expenses.filter((item) => !item.spreadAcrossWeeks && item.date >= weekStart && item.date <= weekEnd).reduce((sum, item) => sum + Math.abs(item.amount), 0) + spreadWeeklyAmount;
     fundsToDistribute += weekIncome;
@@ -1062,7 +1068,7 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
     const available = weeklyShare + carry;
     const remaining = available - weekSpent;
     const format = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short" });
-    weeks.push({ index: weeks.length, start: dateKey(start), label: `${format.format(start)} – ${format.format(finish)}`, spent: weekSpent, available, remaining, carry, current: new Date() >= start && new Date() <= new Date(finish.getFullYear(), finish.getMonth(), finish.getDate(), 23, 59) });
+    weeks.push({ index: weeks.length, start: localDateKey(start), label: `${format.format(start)} – ${format.format(finish)}`, spent: weekSpent, available, remaining, carry, current: today >= weekStart && today <= weekEnd });
     carry = remaining;
   }
   return { opening, income, closing: opening + income - spent, pool, spent, count: expenses.length, transactionCount: rows.length, remaining: pool - spent, weeks };
@@ -1121,7 +1127,7 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
     [localCategories, setLocalCategories] = useState<Category[]>(categories),
     [rows, setRows] = useState<any[]>(initialRows),
     [error, setError] = useState(""),
-    [previewFilter, setPreviewFilter] = useState<"all" | "duplicates" | "new" | "updates">("all");
+    [previewFilter, setPreviewFilter] = useState<"all" | "duplicates" | "potential-duplicates" | "new" | "updates">("all");
   useEffect(() => {
     if (!accountId || !rows.length) return;
     const incomeCategory = incomeCategoryForAccount(accountId, accounts);
@@ -1140,6 +1146,13 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
       const externalIdMatch = source === "enable_banking" && row.externalTransactionId
         ? existingAccountTransactions.find((transaction: Tx) => transaction.source === "enable_banking" && transaction.externalTransactionId === row.externalTransactionId)
         : undefined;
+      const potentialExistingMatch = existingAccountTransactions.find((transaction: Tx) =>
+        transaction.date === row.date &&
+        Number(transaction.amount) === Number(row.amount) &&
+        !sameTransactionDescription(transaction, row) &&
+        transactionSimilarity(transaction, row) >= 0.3 &&
+        transactionSimilarity(transaction, row) < 0.6,
+      );
       const similarExistingMatch = source === "import"
         ? existingAccountTransactions.find((transaction: Tx) => {
           if (Number(transaction.amount) !== Number(row.amount)) return false;
@@ -1162,12 +1175,16 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
           ? buildImportUpdate(similarExistingMatch, row, true)
           : undefined;
       const duplicate = Boolean((externalIdMatch && !updateMatch) || (similarExistingMatch && !updateMatch) || sameFileMatch);
+      const potentialDuplicate = !duplicate && !updateMatch && Boolean(potentialExistingMatch);
       const selectedFixedExpenseId = Number(row.fixedExpenseId);
       const fixedMatch = selectedFixedExpenseId > 0
         ? fixedExpenses.find((expense: FixedExpense) => expense.id === selectedFixedExpenseId)
         : matchingFixedExpense(fixedExpenses, Number(accountId), accounts.find((account: Account) => String(account.id) === accountId)?.type || "personale", row.date, transactionText(row), Number(row.amount), claimedFixedExpenseIds);
-      const willImport = row.exclude !== true && (updateMatch ? updateMatch.autoUpdate === true || row.confirmUpdate === true : !duplicate || row.force === true);
-      return { ...row, index, duplicate, updateMatch, fixedMatch, willImport };
+      const potentialAction = row.potentialAction === "new" || row.potentialAction === "update" ? row.potentialAction : "exclude";
+      const willImport = potentialDuplicate
+        ? potentialAction !== "exclude"
+        : row.exclude !== true && (updateMatch ? updateMatch.autoUpdate === true || row.confirmUpdate === true : !duplicate || row.force === true);
+      return { ...row, index, duplicate, potentialDuplicate, potentialMatch: potentialExistingMatch, potentialAction, exclude: potentialDuplicate ? potentialAction === "exclude" : row.exclude, updateMatch, fixedMatch, willImport };
     });
   }, [rows, history, accountId, fixedExpenses, source]);
   const duplicateCount = previewRows.filter((row) => row.duplicate && !row.force).length;
@@ -1175,13 +1192,15 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
   const filterCounts = {
     all: previewRows.length,
     duplicates: previewRows.filter((row) => row.duplicate).length,
-    new: previewRows.filter((row) => !row.duplicate && !row.updateMatch).length,
+    "potential-duplicates": previewRows.filter((row) => row.potentialDuplicate).length,
+    new: previewRows.filter((row) => !row.duplicate && !row.potentialDuplicate && !row.updateMatch).length,
     updates: previewRows.filter((row) => row.updateMatch).length,
   };
   const filteredPreviewRows = previewRows.filter((row) =>
     previewFilter === "all" ||
     (previewFilter === "duplicates" && row.duplicate) ||
-    (previewFilter === "new" && !row.duplicate && !row.updateMatch) ||
+    (previewFilter === "potential-duplicates" && row.potentialDuplicate) ||
+    (previewFilter === "new" && !row.duplicate && !row.potentialDuplicate && !row.updateMatch) ||
     (previewFilter === "updates" && row.updateMatch),
   );
   const read = async (file: File) => {
@@ -1257,13 +1276,14 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
               {([
                 ["all", "Tutti"],
                 ["duplicates", "Duplicati"],
+                ["potential-duplicates", "Potenziali duplicati"],
                 ["new", "Nuovi"],
                 ["updates", "Aggiornamenti"],
               ] as const).map(([value, label]) => <button key={value} type="button" className={previewFilter === value ? "active" : ""} aria-pressed={previewFilter === value} onClick={() => setPreviewFilter(value)}>{label} <span>{filterCounts[value]}</span></button>)}
             </div>
             <div className="preview-table">
               {filteredPreviewRows.map((r) => (
-                <div key={r.index} className={r.willImport ? "will-import" : "duplicate-row"}>
+                <div key={r.index} className={r.duplicate ? "duplicate-row" : r.potentialDuplicate ? "potential-duplicate-row" : "will-import"}>
                   <span>{r.date}</span>
                   <TransactionDescription description={r.description} details={r.details}/>
                   <span className={r.amount >= 0 ? "positive" : "negative"}>
@@ -1281,11 +1301,13 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
                       {localCategories.map((category: Category) => <option data-no-translate key={category.id} value={category.name}>{translateDefaultCategory(category.name, locale)}</option>)}
                     </select>
                   </label>
-                  <span className="import-status">{r.exclude ? "Escluso" : r.updateMatch?.autoUpdate ? "Sarà aggiornato con i nuovi dettagli" : r.updateMatch && !r.confirmUpdate ? "Aggiornamento disponibile" : r.willImport ? (r.confirmUpdate ? "Sarà aggiornato" : "Sarà importato") : "Duplicato"}</span>
+                  <span className="import-status">{r.potentialDuplicate ? (r.potentialAction === "exclude" ? "Sarà escluso" : r.potentialAction === "update" ? "Aggiornerà l’esistente" : "Sarà importato come nuovo") : r.exclude ? "Escluso" : r.updateMatch?.autoUpdate ? "Sarà aggiornato con i nuovi dettagli" : r.updateMatch && !r.confirmUpdate ? "Aggiornamento disponibile" : r.willImport ? (r.confirmUpdate ? "Sarà aggiornato" : "Sarà importato") : "Duplicato"}</span>
+                  {r.potentialDuplicate && <div className="potential-duplicate-alert" role="alert"><strong>Potenziale duplicato di:</strong><TransactionDescription description={r.potentialMatch.description} details={r.potentialMatch.details}/><span>{r.potentialMatch.date} · {eur.format(Number(r.potentialMatch.amount))}</span></div>}
+                  {r.potentialDuplicate && <div className="potential-duplicate-actions" role="group" aria-label={`Azione per ${r.description}`}>{([ ["new", "Importa come nuovo"], ["exclude", "Escludi"], ["update", "Aggiorna esistente"] ] as const).map(([value, label]) => <label key={value}><input type="radio" name={`potential-action-${r.index}`} value={value} checked={r.potentialAction === value} onChange={() => setRows((current) => current.map((item, index) => index === r.index ? { ...item, potentialAction: value, exclude: value === "exclude" } : item))}/><span>{label}</span></label>)}</div>}
                   {r.updateMatch && !r.updateMatch.autoUpdate && <label className="force-import"><input type="checkbox" checked={r.confirmUpdate === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, confirmUpdate: event.target.checked } : item))}/><span>Conferma aggiornamento{r.updateMatch.dateChanged && <> · Data: {r.updateMatch.transaction.date} → {r.date}</>}{r.updateMatch.amountChanged && <> · Importo: {eur.format(r.updateMatch.transaction.amount)} → {eur.format(Number(r.amount))}</>}{r.updateMatch.descriptionChanged && <> · Descrizione: {r.updateMatch.transaction.description}{r.updateMatch.transaction.details ? ` — ${r.updateMatch.transaction.details}` : ""} → {r.updateMatch.nextDescription}{r.updateMatch.nextDetails ? ` — ${r.updateMatch.nextDetails}` : ""}</>}</span></label>}
                   {r.fixedMatch && <label className="force-import"><input type="checkbox" checked={r.fixedExpenseId === r.fixedMatch.id} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, fixedExpenseId: event.target.checked ? r.fixedMatch.id : undefined } : item))}/><span>Conferma spesa fissa: {r.fixedMatch.name}</span></label>}
                   {r.duplicate && <label className="force-import"><input type="checkbox" checked={r.force === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, force: event.target.checked } : item))}/><span>Importa comunque</span></label>}
-                  {!r.duplicate && <label className="force-import"><input type="checkbox" checked={r.exclude === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, exclude: event.target.checked } : item))}/><span>Non importare questo movimento</span></label>}
+                  {!r.duplicate && !r.potentialDuplicate && <label className="force-import"><input type="checkbox" checked={r.exclude === true} onChange={(event) => setRows((current) => current.map((item, index) => index === r.index ? { ...item, exclude: event.target.checked } : item))}/><span>Non importare questo movimento</span></label>}
                 </div>
               ))}
               {!filteredPreviewRows.length && <p className="preview-filter-empty">Nessun movimento in questo filtro.</p>}
@@ -1316,8 +1338,9 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
                 source,
                 rows: previewRows.map((row) => ({
                   ...row,
-                  updateTransactionId: row.updateMatch?.autoUpdate === true || row.confirmUpdate === true ? row.updateMatch?.transaction.id : undefined,
-                  confirmUpdate: row.updateMatch?.autoUpdate === true || row.confirmUpdate === true,
+                  updateTransactionId: row.potentialDuplicate && row.potentialAction === "update" ? row.potentialMatch?.id : row.updateMatch?.autoUpdate === true || row.confirmUpdate === true ? row.updateMatch?.transaction.id : undefined,
+                  confirmUpdate: (row.potentialDuplicate && row.potentialAction === "update") || row.updateMatch?.autoUpdate === true || row.confirmUpdate === true,
+                  potentialDuplicateUpdate: row.potentialDuplicate && row.potentialAction === "update",
                   skip: !row.willImport,
                 })),
               });
