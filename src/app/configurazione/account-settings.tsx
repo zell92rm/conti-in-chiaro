@@ -23,7 +23,8 @@ export default function AccountSettings({ accountId }: { accountId: number }) {
   const [account, setAccount] = useState<Account | null>(null), [categories, setCategories] = useState<Category[]>([]), [expenses, setExpenses] = useState<FixedExpense[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState("");
   const [searchingId, setSearchingId] = useState<number | null>(null), [searchExpense, setSearchExpense] = useState<FixedExpense | null>(null), [matches, setMatches] = useState<Match[]>([]);
   const [editingExpense, setEditingExpense] = useState<FixedExpense | null>(null);
-  const load = async () => { setLoading(true); const data = await fetch("/api/data").then((response) => response.json()); setAccount((data.accounts || []).find((item: Account) => item.id === accountId) || null); setCategories(data.categories || []); setExpenses((data.fixedExpenses || []).filter((item: FixedExpense) => item.accountId === accountId)); setLoading(false); };
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const load = async () => { setLoading(true); const data = await fetch("/api/data").then((response) => response.json()); setAccount((data.accounts || []).find((item: Account) => item.id === accountId) || null); setAccounts(data.accounts || []); setCategories(data.categories || []); setExpenses((data.fixedExpenses || []).filter((item: FixedExpense) => item.accountId === accountId)); setLoading(false); };
   useEffect(() => { load(); }, [accountId]);
   const post = async (body: Record<string, unknown>) => { const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) setError(data.error || "Operazione non riuscita"); return data; };
   const add = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<true | string> => { const data = await post({ action: "fixed-expense", accountId, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return String(data.error); const match = data.possibleTransactions?.[0]; if (match && confirm(`Il movimento “${match.description}” da € ${Math.abs(match.amount).toFixed(2)} sembra corrispondere. Confermi che questa spesa fissa è già pagata?`)) await post({ action: "fixed-expense-paid", fixedExpenseId: data.row.id, transactionId: match.id }); setError(""); await load(); return true; };
@@ -40,8 +41,52 @@ export default function AccountSettings({ accountId }: { accountId: number }) {
 
   return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><WalletCards size={21}/></span><span>Conti in Chiaro</span></div><nav><a href="/"><ArrowLeft size={15}/> Panoramica</a><a href="/configurazione"><Settings size={15}/> Configurazione</a></nav></aside><section className="content settings-content"><header><div><p className="eyebrow">IMPOSTAZIONI CONTO</p><h1>{account?.name || "Conto"}</h1><p className="page-intro">Gestisci le opzioni specifiche di questo conto.</p></div><Button variant="outline" onClick={() => history.back()}><ArrowLeft size={15}/> Indietro</Button></header>{error && <div className="notice error-notice">{error}</div>}{loading ? <div className="empty">Caricamento…</div> : !account ? <div className="empty">Conto non trovato.</div> : <><AccountOpenBankingSettings accountId={accountId}/><section className="settings-panel fixed-expenses-panel"><div className="settings-heading"><div><h2>Spese fisse mensili</h2><p>Gli importi ancora da pagare vengono riservati nel calcolo del saldo spendibile.</p></div></div>{account.type === "risparmi" ? <p className="fixed-expense-empty">Le spese fisse sono disponibili solo per conti Personale e Spese mese.</p> : <><FixedExpenseForm categories={categories} save={add}/><div className="fixed-expense-list">{expenses.map((expense) => {
     const cycleMonth = currentMonth(account.type), paid = expense.payments.some((payment) => payment.month === cycleMonth), skipped = expense.skippedMonths?.includes(cycleMonth);
-    return <article className="fixed-expense-row" key={expense.id}><div className="fixed-expense-main"><strong>{expense.name}</strong><small>{expense.category || "Qualsiasi categoria"}</small>{expense.notes && <p className="fixed-expense-notes">{expense.notes}</p>}</div><strong className="fixed-expense-amount">€ {expense.amount.toFixed(2)}</strong><span className={`fixed-expense-status ${expense.active === false ? "skipped" : paid ? "paid" : skipped ? "skipped" : "pending"}`}>{expense.active === false ? "Disabilitata" : paid ? "Pagata" : skipped ? "Saltata" : "Da pagare"}</span><div className="fixed-expense-actions"><button type="button" title="Modifica nome, importo, categoria e note" onClick={() => editExpense(expense)}><Pencil size={15}/></button><button type="button" onClick={() => toggleActive(expense)}>{expense.active === false ? "Riattiva" : "Disabilita"}</button>{expense.active !== false && paid && <button type="button" onClick={() => restoreUnpaid(expense)}>Ripristina da pagare</button>}{expense.active !== false && !paid && skipped && <button type="button" onClick={() => toggleSkip(expense)}>Ripristina</button>}{expense.active !== false && !paid && !skipped && <><button type="button" onClick={() => searchTransactions(expense)}><Search size={14}/> {searchingId === expense.id ? "Ricerca…" : "Ricerca spesa nel conto"}</button><button type="button" onClick={() => toggleSkip(expense)}>Salta mese</button></>}<button className="danger" title="Elimina" onClick={() => remove(expense)}><Trash2 size={16}/></button></div>{expense.active !== false && searchExpense?.id === expense.id && <div className="fixed-expense-matches"><div className="fixed-expense-matches-heading"><strong>Movimenti più simili del mese</strong><button type="button" onClick={() => setSearchExpense(null)}>Chiudi</button></div>{searchingId === expense.id ? <p>Ricerca in corso…</p> : matches.length ? matches.map((match) => <div className="fixed-expense-match" key={match.id}><div><TransactionDescription description={match.description} details={match.details}/><small>{formatDate(match.date)} · {match.category}</small></div><strong>€ {Math.abs(match.amount).toFixed(2)}</strong><button type="button" onClick={() => markPaid(match.id)}>Segna come pagata</button></div>) : <p>Nessun movimento compatibile trovato nel mese corrente.</p>}</div>}</article>;
+    return <article className="fixed-expense-row" key={expense.id}><div className="fixed-expense-main"><strong>{expense.name}</strong><small>{expense.category || "Qualsiasi categoria"}</small>{expense.notes && <p className="fixed-expense-notes">{expense.notes}</p>}</div><strong className="fixed-expense-amount">€ {expense.amount.toFixed(2)}</strong><span className={`fixed-expense-status ${expense.active === false ? "skipped" : paid ? "paid" : skipped ? "skipped" : "pending"}`}>{expense.active === false ? "Disabilitata" : paid ? "Pagata" : skipped ? "Saltata" : "Da pagare"}</span><div className="fixed-expense-actions">{!paid && !skipped && <MoveFixedExpense expense={expense} accounts={accounts} moved={async () => { setSearchExpense(null); setMatches([]); await load(); }}/>}<button type="button" title="Modifica nome, importo, categoria e note" onClick={() => editExpense(expense)}><Pencil size={15}/></button><button type="button" onClick={() => toggleActive(expense)}>{expense.active === false ? "Riattiva" : "Disabilita"}</button>{expense.active !== false && paid && <button type="button" onClick={() => restoreUnpaid(expense)}>Ripristina da pagare</button>}{expense.active !== false && !paid && skipped && <button type="button" onClick={() => toggleSkip(expense)}>Ripristina</button>}{expense.active !== false && !paid && !skipped && <><button type="button" onClick={() => searchTransactions(expense)}><Search size={14}/> {searchingId === expense.id ? "Ricerca…" : "Ricerca spesa nel conto"}</button><button type="button" onClick={() => toggleSkip(expense)}>Salta mese</button></>}<button className="danger" title="Elimina" onClick={() => remove(expense)}><Trash2 size={16}/></button></div>{expense.active !== false && searchExpense?.id === expense.id && <div className="fixed-expense-matches"><div className="fixed-expense-matches-heading"><strong>Movimenti più simili del mese</strong><button type="button" onClick={() => setSearchExpense(null)}>Chiudi</button></div>{searchingId === expense.id ? <p>Ricerca in corso…</p> : matches.length ? matches.map((match) => <div className="fixed-expense-match" key={match.id}><div><TransactionDescription description={match.description} details={match.details}/><small>{formatDate(match.date)} · {match.category}</small></div><strong>€ {Math.abs(match.amount).toFixed(2)}</strong><button type="button" onClick={() => markPaid(match.id)}>Segna come pagata</button></div>) : <p>Nessun movimento compatibile trovato nel mese corrente.</p>}</div>}</article>;
   })}{!expenses.length && <p className="fixed-expense-empty">Nessuna spesa fissa configurata.</p>}</div></>}</section></>}</section></main>;
+}
+
+function MoveFixedExpense({ expense, accounts, moved }: { expense: FixedExpense; accounts: Account[]; moved: () => Promise<void> }) {
+  const destinations = accounts.filter((account) => account.id !== expense.accountId && ["personale", "spese_mese"].includes(account.type));
+  const [open, setOpen] = useState(false);
+  const [destinationId, setDestinationId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  return <>
+    <button type="button" onClick={() => { setDestinationId(""); setError(""); setOpen(true); }}>Cambia conto associato</button>
+    <Dialog open={open} onOpenChange={(value) => { if (!saving) setOpen(value); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Cambia conto associato</DialogTitle></DialogHeader>
+        <form className="form" onSubmit={async (event) => {
+          event.preventDefault();
+          if (saving || !destinations.some((account) => String(account.id) === destinationId)) return;
+          setSaving(true);
+          setError("");
+          try {
+            const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "fixed-expense-move", id: expense.id, accountId: Number(destinationId) }) });
+            const data = await response.json();
+            if (!response.ok || data.error) { setError(data.error || "Operazione non riuscita"); return; }
+            setOpen(false);
+            await moved();
+          } catch {
+            setError("Operazione non riuscita. Controlla la connessione e riprova.");
+          } finally {
+            setSaving(false);
+          }
+        }}>
+          <p><strong data-no-translate>{expense.name}</strong></p>
+          <p>Note, parole chiave, pagamenti e mesi saltati vengono conservati. I movimenti registrati restano sul conto originale.</p>
+          {destinations.length ? <label className="field"><span>Conto di destinazione</span><select required value={destinationId} disabled={saving} onChange={(event) => setDestinationId(event.target.value)}>
+            <option value="">Seleziona un conto</option>
+            {destinations.map((account) => <option data-no-translate key={account.id} value={account.id}>{account.name}</option>)}
+          </select></label> : <p>Nessun altro conto disponibile. Crea un conto Personale o Spese mese per spostare questa spesa.</p>}
+          {error && <p className="error" role="alert">{error}</p>}
+          <Button type="submit" disabled={saving || !destinationId}>{saving ? "Spostamento in corso…" : "Cambia conto associato"}</Button>
+          <Button type="button" variant="outline" disabled={saving} onClick={() => setOpen(false)}>Annulla</Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 type FixedExpenseSave = (name: string, amount: string, category: string, keywords: string[], notes: string) => Promise<true | string>;

@@ -898,10 +898,11 @@ function CategorySpending({ transactions, categories }: { transactions: Tx[]; ca
   const { locale } = useLocale();
   const knownColors = new Map(categories.map((category) => [category.name, category.color]));
   const totals = new Map<string, number>();
-  transactions.filter((transaction) => transaction.amount < 0).forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + Math.abs(transaction.amount)));
-  const data = Array.from(totals, ([name, value]) => ({ name, value, color: knownColors.get(name) || "#7b837e" })).sort((left, right) => right.value - left.value);
-  if (!data.length) return <p className="muted">Nessuna spesa nel periodo selezionato.</p>;
-  return <div className="category-spending-scroll" tabIndex={0} aria-label="Spese per categoria, scorri verticalmente per vederle tutte">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${(category.value / data[0].value) * 100}%`, background: category.color }}/></div></div>)}</div>;
+  transactions.forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + transaction.amount));
+  const data = Array.from(totals, ([name, value]) => ({ name, value, color: knownColors.get(name) || "#7b837e" })).sort((left, right) => Math.abs(right.value) - Math.abs(left.value));
+  if (!data.length) return <p className="muted">Nessun movimento nel periodo selezionato.</p>;
+  const maxMagnitude = Math.abs(data[0].value);
+  return <div className="category-spending-scroll" tabIndex={0} aria-label="Spese per categoria, scorri verticalmente per vederle tutte">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${maxMagnitude ? (Math.abs(category.value) / maxMagnitude) * 100 : 0}%`, background: category.color }}/></div></div>)}</div>;
 }
 
 function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {

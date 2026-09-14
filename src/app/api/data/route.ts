@@ -532,6 +532,22 @@ export async function POST(request: Request) {
     if (validation.keywords.length) await db.insert(fixedExpenseKeywordSources).values(validation.keywords.map((keyword) => ({ ownerEmail: user.email, fixedExpenseId: id, keyword, source: "manual" }))).onConflictDoNothing();
     return Response.json({ ok: true });
   }
+  if (body.action === "fixed-expense-move") {
+    const id = Number(body.id), accountId = Number(body.accountId);
+    if (!Number.isInteger(id) || id < 1 || !Number.isInteger(accountId) || accountId < 1)
+      return Response.json({ error: "Spesa fissa o conto non valido" }, { status: 400 });
+    const [destination] = await db.select().from(accounts).where(and(
+      eq(accounts.id, accountId), eq(accounts.ownerEmail, user.email),
+    )).limit(1);
+    if (!destination || !["personale", "spese_mese"].includes(destination.type))
+      return Response.json({ error: "Seleziona un conto Personale o Spese mese" }, { status: 400 });
+    // Keep the expense identity and its payment, skip and keyword history.
+    const updated = await db.update(fixedExpenses).set({ accountId }).where(and(
+      eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email),
+    )).returning({ id: fixedExpenses.id });
+    if (!updated.length) return Response.json({ error: "Spesa fissa non trovata" }, { status: 404 });
+    return Response.json({ ok: true, accountId });
+  }
   if (body.action === "fixed-expense-active") {
     const id = Number(body.id), active = body.active === true;
     const updated = await db.update(fixedExpenses).set({ active }).where(and(
