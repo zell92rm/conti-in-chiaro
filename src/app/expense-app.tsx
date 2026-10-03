@@ -907,14 +907,22 @@ function CategorySpending({ transactions, categories }: { transactions: Tx[]; ca
 
 function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
   const { locale } = useLocale();
+  const weeksGridRef = useRef<HTMLElement | null>(null);
   const selectedPeriod = dashboardPeriod(month, account);
   const today = localDateKey(new Date());
   const isCurrentPeriod = today >= selectedPeriod.start && today <= selectedPeriod.end;
   const reserved = isCurrentPeriod ? unpaidFixedTotal(fixedExpenses, account.id, month) : 0;
   const data = useMemo(() => calculateWeeks(transactions, month, reserved), [transactions, month, reserved]);
-  const elapsedPeriodDays = Math.floor((Date.parse(`${today}T12:00:00`) - Date.parse(`${selectedPeriod.start}T12:00:00`)) / 86400000);
-  const currentWeekIndex = isCurrentPeriod ? Math.min(data.weeks.length - 1, Math.max(0, Math.floor(elapsedPeriodDays / 7))) : -1;
+  const currentWeekIndex = isCurrentPeriod ? data.weeks.findIndex((week) => week.current) : -1;
   const currentWeek = currentWeekIndex >= 0 ? data.weeks[currentWeekIndex] : undefined;
+  useLayoutEffect(() => {
+    const grid = weeksGridRef.current;
+    if (!grid || currentWeekIndex < 0 || !window.matchMedia("(max-width: 767px)").matches) return;
+    const card = grid.children[currentWeekIndex] as HTMLElement | undefined;
+    if (!card) return;
+    const left = grid.scrollLeft + card.getBoundingClientRect().left - grid.getBoundingClientRect().left - (grid.clientWidth - card.clientWidth) / 2;
+    grid.scrollTo({ left, behavior: "instant" });
+  }, [account.id, month, currentWeekIndex]);
   return <>
     <section className="weekly-summary weekly-summary-four compact-weekly-summary">
       {isCurrentPeriod ? <>
@@ -930,7 +938,7 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
         <article><span>Movimenti del periodo</span><strong>{data.transactionCount}</strong><small>Solo dal {formatPeriod(selectedPeriod, locale)}</small></article>
       </>}
     </section>
-    <section className="weeks-grid home-weeks-grid">
+    <section className="weeks-grid home-weeks-grid" ref={weeksGridRef}>
       {data.weeks.map((week) => <article className={`week-card ${week.index === currentWeekIndex ? "current" : ""}`} key={week.start}>
         <div className="week-top"><div><small>SETTIMANA {week.index + 1}</small><h2>{week.label}</h2></div>{week.index === currentWeekIndex && <b>In corso</b>}</div>
         <div className="week-numbers">
@@ -1014,23 +1022,6 @@ function localDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function cycleStartFriday(monthStart: Date) {
-  const nextFriday = new Date(monthStart);
-  nextFriday.setDate(monthStart.getDate() + ((5 - monthStart.getDay() + 7) % 7));
-  const previousFriday = new Date(nextFriday);
-  previousFriday.setDate(previousFriday.getDate() - 7);
-  const daysBeforeMonth = Math.round((monthStart.getTime() - previousFriday.getTime()) / 86400000);
-  return daysBeforeMonth <= 1 ? previousFriday : nextFriday;
-}
-
-function monthlyCycleBounds(monthStart: Date) {
-  const start = cycleStartFriday(monthStart);
-  const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 12);
-  const end = cycleStartFriday(nextMonthStart);
-  end.setDate(end.getDate() - 1);
-  return { start, end };
-}
-
 function movementCycleMonth(dateValue: string, account: Account) {
   return accountCycleMonth(dateValue, account.type);
 }
@@ -1041,8 +1032,9 @@ function formatPeriod(period: { start: string; end: string }, locale: "it" | "en
 }
 
 function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
-  const monthStart = new Date(`${month}-01T12:00:00`);
-  const { start: firstFriday, end: cycleEnd } = monthlyCycleBounds(monthStart);
+  const cycle = accountPeriodBounds(month, "spese_mese");
+  const firstFriday = new Date(`${cycle.start}T12:00:00`);
+  const cycleEnd = new Date(`${cycle.end}T12:00:00`);
   const today = localDateKey(new Date());
   const startKey = localDateKey(firstFriday), endKey = localDateKey(cycleEnd);
   const opening = transactions.filter((item) => item.date < startKey).reduce((sum, item) => sum + item.amount, 0);
@@ -1140,12 +1132,13 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
   }, [accountId, rows.length, accounts]);
   const previewRows = useMemo(() => {
     const existingAccountTransactions = history.filter((transaction: Tx) => String(transaction.accountId) === accountId);
+    const matchedExistingIds = new Set<number>();
     const claimedFixedExpenseIds = new Set<number>(rows.map((row) => Number(row.fixedExpenseId)).filter((id) => id > 0));
     const orderedRows = rows.map((row, index) => ({ row, index }));
     if (source === "enable_banking") orderedRows.sort((left, right) => transactionDateValue(right.row.date) - transactionDateValue(left.row.date) || left.index - right.index);
     return orderedRows.map(({ row, index }) => {
       const externalIdMatch = source === "enable_banking" && row.externalTransactionId
-        ? existingAccountTransactions.find((transaction: Tx) => transaction.source === "enable_banking" && transaction.externalTransactionId === row.externalTransactionId)
+        ? existingAccountTransactions.find((transaction: Tx) => !matchedExistingIds.has(transaction.id) && transaction.source === "enable_banking" && transaction.externalTransactionId === row.externalTransactionId)
         : undefined;
       const potentialExistingMatch = existingAccountTransactions.find((transaction: Tx) =>
         transaction.date === row.date &&
@@ -1156,26 +1149,26 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
       );
       const similarExistingMatch = source === "import"
         ? existingAccountTransactions.find((transaction: Tx) => {
+          if (matchedExistingIds.has(transaction.id)) return false;
           if (Number(transaction.amount) !== Number(row.amount)) return false;
           const days = calendarDayDistance(transaction.date, row.date);
           return days <= 2 && transactionSimilarity(transaction, row) >= (days === 0 ? 0.6 : 0.8);
         })
         : source === "enable_banking" && !externalIdMatch
           ? existingAccountTransactions.find((transaction: Tx) => {
+            if (matchedExistingIds.has(transaction.id)) return false;
             return transaction.date === row.date &&
               Number(transaction.amount) === Number(row.amount) &&
               transactionSimilarity(transaction, row) >= 0.6;
           })
           : undefined;
-      const sameFileMatch = source === "import" ? rows.slice(0, index).find((transaction: Tx) =>
-        transaction.date === row.date && Number(transaction.amount) === Number(row.amount) && transactionSimilarity(transaction, row) >= 0.6,
-      ) : undefined;
+      if (externalIdMatch || similarExistingMatch) matchedExistingIds.add((externalIdMatch || similarExistingMatch).id);
       const updateMatch = externalIdMatch
         ? buildImportUpdate(externalIdMatch, row)
         : similarExistingMatch
           ? buildImportUpdate(similarExistingMatch, row, true)
           : undefined;
-      const duplicate = Boolean((externalIdMatch && !updateMatch) || (similarExistingMatch && !updateMatch) || sameFileMatch);
+      const duplicate = Boolean((externalIdMatch && !updateMatch) || (similarExistingMatch && !updateMatch));
       const potentialDuplicate = !duplicate && !updateMatch && Boolean(potentialExistingMatch);
       const selectedFixedExpenseId = Number(row.fixedExpenseId);
       const fixedMatch = selectedFixedExpenseId > 0

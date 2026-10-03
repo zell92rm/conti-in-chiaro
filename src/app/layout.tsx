@@ -7,7 +7,14 @@ import "./open-banking-settings.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = normalizeLocale((await cookies()).get(LOCALE_COOKIE)?.value);
-  return { title: locale === "en" ? "Clear Accounts" : "Conti in Chiaro", description: locale === "en" ? "Your monthly finances, account by account." : "Il tuo quadro mensile, conto per conto.", icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" } };
+  return {
+    title: locale === "en" ? "Clear Accounts" : "Conti in Chiaro",
+    description: locale === "en" ? "Your monthly finances, account by account." : "Il tuo quadro mensile, conto per conto.",
+    applicationName: "Conti in Chiaro",
+    manifest: "/manifest.webmanifest",
+    appleWebApp: { capable: true, statusBarStyle: "default", title: "Conti in Chiaro" },
+    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg", apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }] },
+  };
 }
 
 export default async function RootLayout({

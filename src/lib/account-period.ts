@@ -29,7 +29,7 @@ function lastWorkingDay(year: number, monthIndex: number) {
 function fridayCycleStart(monthStart: Date) {
   const next = new Date(monthStart); next.setDate(monthStart.getDate() + ((5 - monthStart.getDay() + 7) % 7));
   const previous = new Date(next); previous.setDate(previous.getDate() - 7);
-  return Math.round((monthStart.getTime() - previous.getTime()) / 86400000) <= 1 ? previous : next;
+  return Math.round((monthStart.getTime() - previous.getTime()) / 86400000) <= 3 ? previous : next;
 }
 
 export function accountPeriodBounds(month: string, type: AccountPeriodType) {

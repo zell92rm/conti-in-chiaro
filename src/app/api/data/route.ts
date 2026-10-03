@@ -903,18 +903,32 @@ export async function POST(request: Request) {
       eq(transactions.ownerEmail, user.email),
       eq(transactions.accountId, accountId),
     ));
-    const currentExternalTransactionIds = new Set<string>();
-    const currentImportedTransactions: Array<{ date: string; amount: number; description: string; details: string | null }> = [];
+    const matchedExistingIds = new Set<number>();
     for (const item of body.rows || []) {
       const amount = Number(item.amount);
+      const externalTransactionId = importSource === "enable_banking" && typeof item.externalTransactionId === "string"
+        ? item.externalTransactionId.trim().slice(0, 500) || null
+        : null;
+      const incomingText = { description: String(item.description), details: typeof item.details === "string" ? item.details : null };
+      const externalMatch = externalTransactionId ? existingTransactions.find((transaction) =>
+        !matchedExistingIds.has(transaction.id) && transaction.source === "enable_banking" && transaction.externalTransactionId === externalTransactionId,
+      ) : undefined;
+      const similarMatch = importSource === "import"
+        ? existingTransactions.find((transaction) => {
+          if (matchedExistingIds.has(transaction.id) || Number(transaction.amount) !== amount) return false;
+          const days = calendarDayDistance(transaction.date, String(item.date));
+          return days <= 2 && transactionSimilarity(transaction, incomingText) >= (days === 0 ? 0.6 : 0.8);
+        })
+        : !externalMatch ? existingTransactions.find((transaction) =>
+          !matchedExistingIds.has(transaction.id) && transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6,
+        ) : undefined;
+      const existingMatchId = externalMatch?.id || similarMatch?.id;
+      if (existingMatchId) matchedExistingIds.add(existingMatchId);
       if (item.skip === true) {
         if (item.exclude === true) excluded++;
         else duplicates++;
         continue;
       }
-      const externalTransactionId = importSource === "enable_banking" && typeof item.externalTransactionId === "string"
-        ? item.externalTransactionId.trim().slice(0, 500) || null
-        : null;
       if (item.categoryEdited === true && item.confirmUpdate !== true && amount < 0) {
         const similarIds = existingTransactions
           .filter((transaction) => transaction.amount < 0 && sameTransactionDescription(transaction, { description: String(item.description), details: typeof item.details === "string" ? item.details : null }))
@@ -964,25 +978,7 @@ export async function POST(request: Request) {
           return Response.json({ error: "Impossibile aggiornare il movimento importato" }, { status: 500 });
         }
       }
-      const incomingText = { description: String(item.description), details: typeof item.details === "string" ? item.details : null };
-      const matchesExternalId = externalTransactionId && existingTransactions.some((transaction) =>
-        transaction.source === "enable_banking" && transaction.externalTransactionId === externalTransactionId,
-      );
-      const matchesImportedFile = importSource === "import"
-        ? existingTransactions.some((transaction) => {
-          if (Number(transaction.amount) !== amount) return false;
-          const days = calendarDayDistance(transaction.date, String(item.date));
-          return days <= 2 && transactionSimilarity(transaction, incomingText) >= (days === 0 ? 0.6 : 0.8);
-        }) || currentImportedTransactions.some((transaction) =>
-          transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6,
-        )
-        : importSource === "enable_banking" && (existingTransactions.some((transaction) =>
-          transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6
-        ) || currentImportedTransactions.some((transaction) =>
-          transaction.date === item.date && Number(transaction.amount) === amount && transactionSimilarity(transaction, incomingText) >= 0.6
-        ));
-      const matchesExisting = Boolean(matchesExternalId || matchesImportedFile);
-      if ((matchesExisting || (externalTransactionId && currentExternalTransactionIds.has(externalTransactionId))) && item.force !== true) {
+      if (existingMatchId && item.force !== true) {
         duplicates++;
         continue;
       }
@@ -1019,10 +1015,6 @@ export async function POST(request: Request) {
           item.categoryEdited === true ? insertedRow.category : null,
           Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null,
         );
-        if (externalTransactionId) currentExternalTransactionIds.add(externalTransactionId);
-        currentImportedTransactions.push({
-          date: String(item.date), amount, description: String(item.description), details: typeof item.details === "string" ? item.details : null,
-        });
         inserted++;
       } catch {
         if (externalTransactionId) duplicates++;
