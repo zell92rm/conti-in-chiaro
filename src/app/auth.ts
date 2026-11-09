@@ -126,7 +126,7 @@ export function assertSameOrigin(request: Request): void {
 }
 
 function isLocalHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" || hostname === "[::1]" || hostname.endsWith(".local") || hostname === "pcs5.reply";
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" || hostname === "[::1]" || hostname.endsWith(".local");
 }
 
 export function safeReturnTo(value: string | null): string {

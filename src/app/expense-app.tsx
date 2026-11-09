@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { reportKeywordConflicts } from "@/components/keyword-conflict-dialog";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -128,13 +129,20 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     }
     if (isInitialLoad) {
       configuredHomeAccount.current = d.homeAccountId == null ? "all" : String(d.homeAccountId);
-      setAccountFilter(configuredHomeAccount.current);
+      let stored: string | null = null;
+      try { stored = sessionStorage.getItem("selectedAccountFilter"); } catch { /* storage non disponibile */ }
+      const storedIsValid = stored === "all" || (stored !== null && (d.accounts || []).some((account: Account) => String(account.id) === stored));
+      setAccountFilter(storedIsValid ? stored! : configuredHomeAccount.current);
     }
     setLoading(false);
   };
   useEffect(() => {
     load();
   }, []);
+  useEffect(() => {
+    if (!hasLoadedData.current || loading) return;
+    try { sessionStorage.setItem("selectedAccountFilter", accountFilter); } catch { /* storage non disponibile */ }
+  }, [accountFilter, loading]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -273,7 +281,9 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    const data = await r.json();
+    reportKeywordConflicts(data?.keywordConflicts);
+    return data;
   };
   const syncBank = async () => {
     if (!selectedAccount || !bankLinks[selectedAccount.id] || syncingBank) return;
@@ -563,7 +573,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                 <div className="panel-title">
                   <div>
                     <p>Dove vanno i tuoi soldi</p>
-                    <h2>Spese per categoria</h2>
+                    <h2>Movimenti per categoria</h2>
                   </div>
                 </div>
                 <CategorySpending transactions={current} categories={categories}/>
@@ -625,7 +635,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                                   {t.fixedExpenseId && (
                                     <small className="tag fixed-expense-tag" title={fixedExpenses.find((expense) => expense.id === t.fixedExpenseId)?.name || "Spesa fissa"}>Spesa fissa</small>
                                   )}
-                                  {t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese" && <label className="spread-expense-toggle"><input type="checkbox" checked={t.spreadAcrossWeeks === true} disabled={savingSpreadIds.has(t.id)} onChange={(event) => toggleTransactionSpread(t, event.target.checked)}/><span>Spalma la spesa</span></label>}
+                                  {t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese" && <label className="spread-expense-toggle" title={t.fixedExpenseId ? "Spesa fissa: già accantonata nel disponibile del periodo" : undefined} style={t.fixedExpenseId ? { opacity: 0.5 } : undefined}><input type="checkbox" checked={!t.fixedExpenseId && t.spreadAcrossWeeks === true} disabled={!!t.fixedExpenseId || savingSpreadIds.has(t.id)} onChange={(event) => toggleTransactionSpread(t, event.target.checked)}/><span>Spalma la spesa</span></label>}
                                 </div>
                               )}
                             </TableCell>
@@ -891,18 +901,28 @@ function AccountTypeOverview({
 }
 
 function CategorySpendingPanel({ transactions, categories }: { transactions: Tx[]; categories: Category[] }) {
-  return <section className="analysis-grid single-analysis category-spending-section"><article className="panel"><div className="panel-title"><div><p>Dove vanno i tuoi soldi</p><h2>Spese per categoria</h2></div></div><CategorySpending transactions={transactions} categories={categories}/></article></section>;
+  return <section className="analysis-grid single-analysis category-spending-section"><article className="panel"><div className="panel-title"><div><p>Dove vanno i tuoi soldi</p><h2>Movimenti per categoria</h2></div></div><CategorySpending transactions={transactions} categories={categories}/></article></section>;
 }
 
 function CategorySpending({ transactions, categories }: { transactions: Tx[]; categories: Category[] }) {
   const { locale } = useLocale();
+  const [kind, setKind] = useState<"uscite" | "entrate">("uscite");
   const knownColors = new Map(categories.map((category) => [category.name, category.color]));
   const totals = new Map<string, number>();
-  transactions.forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + transaction.amount));
+  transactions
+    .filter((transaction) => kind === "uscite" ? transaction.amount < 0 : transaction.amount > 0)
+    .forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + transaction.amount));
   const data = Array.from(totals, ([name, value]) => ({ name, value, color: knownColors.get(name) || "#7b837e" })).sort((left, right) => Math.abs(right.value) - Math.abs(left.value));
-  if (!data.length) return <p className="muted">Nessun movimento nel periodo selezionato.</p>;
-  const maxMagnitude = Math.abs(data[0].value);
-  return <div className="category-spending-scroll" tabIndex={0} aria-label="Spese per categoria, scorri verticalmente per vederle tutte">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${maxMagnitude ? (Math.abs(category.value) / maxMagnitude) * 100 : 0}%`, background: category.color }}/></div></div>)}</div>;
+  const maxMagnitude = data.length ? Math.abs(data[0].value) : 0;
+  return <>
+    <div className="category-kind-toggle" role="group" aria-label="Tipo di movimenti">
+      <button type="button" className={kind === "uscite" ? "active" : ""} aria-pressed={kind === "uscite"} onClick={() => setKind("uscite")}>Uscite</button>
+      <button type="button" className={kind === "entrate" ? "active" : ""} aria-pressed={kind === "entrate"} onClick={() => setKind("entrate")}>Entrate</button>
+    </div>
+    {!data.length
+      ? <p className="muted">{kind === "uscite" ? "Nessuna uscita nel periodo selezionato." : "Nessuna entrata nel periodo selezionato."}</p>
+      : <div className="category-spending-scroll" tabIndex={0} aria-label="Movimenti per categoria, scorri verticalmente per vederli tutti">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${maxMagnitude ? (Math.abs(category.value) / maxMagnitude) * 100 : 0}%`, background: category.color }}/></div></div>)}</div>}
+  </>;
 }
 
 function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, categories }: { account: Account; transactions: Tx[]; month: string; fixedExpenses: FixedExpense[]; categories: Category[] }) {
@@ -927,14 +947,14 @@ function MonthlyExpenseOverview({ account, transactions, month, fixedExpenses, c
     <section className="weekly-summary weekly-summary-four compact-weekly-summary">
       {isCurrentPeriod ? <>
         <article className="current-week-balance"><span>Saldo settimana corrente</span><strong>{eur.format(currentWeek?.remaining ?? 0)}</strong><small>Resta per la settimana{currentWeek ? ` · ${currentWeek.label}` : ""}</small></article>
-        <article><span>Saldo attuale sul conto</span><strong>{eur.format(data.closing)}</strong><small>{locale === "en" ? `${eur.format(data.opening)} opening balance + ${eur.format(data.income)} income − ${eur.format(data.spent)} outgoings` : `${eur.format(data.opening)} iniziali + ${eur.format(data.income)} entrate − ${eur.format(data.spent)} uscite`}</small></article>
+        <article><span>Saldo attuale sul conto</span><strong>{eur.format(data.closing)}</strong><small>{locale === "en" ? `${eur.format(data.opening)} opening balance + ${eur.format(data.income)} income − ${eur.format(data.totalSpent)} outgoings` : `${eur.format(data.opening)} iniziali + ${eur.format(data.income)} entrate − ${eur.format(data.totalSpent)} uscite`}</small></article>
         <article><span>Saldo previsto sul conto</span><strong>{eur.format(data.remaining)}</strong><small>Considerando {eur.format(reserved)} di spese fisse non pagate</small></article>
         <article><span>Disponibile nel periodo</span><strong>{eur.format(data.pool)}</strong><small>Dal primo venerdì al giovedì finale</small></article>
         <article><span>Speso fino ad ora</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
       </> : <>
-        <article className="accent"><span>Saldo del periodo</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} residui + {eur.format(data.income)} entrate − {eur.format(data.spent)} uscite</small></article>
+        <article className="accent"><span>Saldo del periodo</span><strong>{eur.format(data.closing)}</strong><small>{eur.format(data.opening)} residui + {eur.format(data.income)} entrate − {eur.format(data.totalSpent)} uscite</small></article>
         <article><span>Entrate del periodo</span><strong>{eur.format(data.opening + data.income)}</strong><small>{eur.format(data.income)} entrate + {eur.format(data.opening)} rimasti dal periodo precedente</small></article>
-        <article><span>Uscite del periodo</span><strong>{eur.format(data.spent)}</strong><small>{data.count} movimenti di spesa</small></article>
+        <article><span>Uscite del periodo</span><strong>{eur.format(data.totalSpent)}</strong><small>{data.totalCount} movimenti di spesa</small></article>
         <article><span>Movimenti del periodo</span><strong>{data.transactionCount}</strong><small>Solo dal {formatPeriod(selectedPeriod, locale)}</small></article>
       </>}
     </section>
@@ -1041,13 +1061,18 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
   const rows = transactions.filter((item) => item.date >= startKey && item.date <= endKey);
   const incomes = rows.filter((item) => item.amount > 0);
   const income = incomes.reduce((sum, item) => sum + item.amount, 0);
-  const expenses = rows.filter((item) => item.amount < 0);
-  const spent = expenses.reduce((sum, item) => sum + Math.abs(item.amount), 0);
-  const pool = opening + income - reserved;
+  const allExpenses = rows.filter((item) => item.amount < 0);
+  const spent = allExpenses.reduce((sum, item) => sum + Math.abs(item.amount), 0);
+  // Le spese fisse sono già accantonate nel disponibile del periodo: quando vengono registrate non vanno scalate di nuovo dalle settimane.
+  const fixedPaid = allExpenses.filter((item) => item.fixedExpenseId).reduce((sum, item) => sum + Math.abs(item.amount), 0);
+  const expenses = allExpenses.filter((item) => !item.fixedExpenseId);
+  const variableSpent = spent - fixedPaid;
+  const fixedTotal = fixedPaid + reserved;
+  const pool = opening + income - fixedTotal;
   const weeks: Array<{index:number;start:string;label:string;spent:number;available:number;remaining:number;carry:number;current:boolean}> = [];
   const weekCount = Math.max(1, Math.ceil((cycleEnd.getTime() - firstFriday.getTime() + 86400000) / 604800000));
   const spreadWeeklyAmount = expenses.filter((item) => item.spreadAcrossWeeks).reduce((sum, item) => sum + Math.abs(item.amount), 0) / weekCount;
-  let fundsToDistribute = opening - reserved;
+  let fundsToDistribute = opening - fixedTotal;
   let carry = 0;
   for (let cursor = new Date(firstFriday); cursor <= cycleEnd; cursor.setDate(cursor.getDate() + 7)) {
     const start = new Date(cursor), finish = new Date(cursor); finish.setDate(finish.getDate() + 6);
@@ -1064,7 +1089,7 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
     weeks.push({ index: weeks.length, start: localDateKey(start), label: `${format.format(start)} – ${format.format(finish)}`, spent: weekSpent, available, remaining, carry, current: today >= weekStart && today <= weekEnd });
     carry = remaining;
   }
-  return { opening, income, closing: opening + income - spent, pool, spent, count: expenses.length, transactionCount: rows.length, remaining: pool - spent, weeks };
+  return { opening, income, closing: opening + income - spent, pool, spent: variableSpent, totalSpent: spent, totalCount: allExpenses.length, count: expenses.length, transactionCount: rows.length, remaining: pool - variableSpent, weeks };
 }
 function unpaidFixedTotal(expenses: FixedExpense[], accountId: number, month: string) {
   return expenses.filter((expense) => expense.active !== false && expense.accountId === accountId && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month)).reduce((sum, expense) => sum + expense.amount, 0);

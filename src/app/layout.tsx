@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { LocaleProvider } from "@/components/locale-provider";
+import { KeywordConflictHost } from "@/components/keyword-conflict-dialog";
 import { LOCALE_COOKIE, normalizeLocale } from "@/lib/i18n";
 import "./globals.css";
 import "./open-banking-settings.css";
@@ -25,7 +26,7 @@ export default async function RootLayout({
   const locale = normalizeLocale((await cookies()).get(LOCALE_COOKIE)?.value);
   return (
     <html lang={locale}>
-      <body className="antialiased"><LocaleProvider locale={locale}>{children}</LocaleProvider></body>
+      <body className="antialiased"><LocaleProvider locale={locale}>{children}<KeywordConflictHost /></LocaleProvider></body>
     </html>
   );
 }

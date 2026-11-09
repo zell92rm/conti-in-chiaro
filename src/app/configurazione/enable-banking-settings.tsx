@@ -3,13 +3,12 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, FileKey2, KeyRound, ShieldCheck, Power, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SITE_ORIGIN } from "@/lib/open-banking-urls";
 import { useLocale } from "@/components/locale-provider";
 
 type Config = { configured: boolean; applicationId?: string; privateKeyConfigured: boolean; status: "NOT_CONFIGURED" | "CONFIGURED" | "VALID" | "ERROR" };
 
 export default function EnableBankingSettings() {
-  const [config, setConfig] = useState<Config | null>(null), [applicationId, setApplicationId] = useState(""), [file, setFile] = useState<File | null>(null), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [siteOrigin, setSiteOrigin] = useState(SITE_ORIGIN);
+  const [config, setConfig] = useState<Config | null>(null), [applicationId, setApplicationId] = useState(""), [file, setFile] = useState<File | null>(null), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [siteOrigin, setSiteOrigin] = useState("");
   const load = async () => { const response = await fetch("/api/open-banking/enable-banking"); setConfig(await response.json()); };
   useEffect(() => { setSiteOrigin(window.location.origin.replace(/\/$/, "")); load(); }, []);
   const enableBankingRedirectUrl = `${siteOrigin}/api/open-banking/callback`;

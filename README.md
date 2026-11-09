@@ -363,3 +363,11 @@ wrangler.d1.jsonc            D1 migration-only configuration
 ### License
 
 This project is distributed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [LICENSE](LICENSE) for the full text and the terms governing use, modification, and distribution.
+
+### Esecuzione locale con Docker
+
+```bash
+docker compose up --build
+```
+
+Apri <http://localhost:5173> (o <http://localhost>). Per usare HTTPS autofirmato avvia con `DEV_HTTP=0 docker compose up --build` e apri <https://localhost:5173>. Il codice è copiato nell'immagine: dopo ogni modifica ripeti `docker compose up --build`. Al primo avvio vengono applicate le migrazioni sul database D1 locale, salvato nel volume `data` insieme alla chiave `OPEN_BANKING_ENCRYPTION_KEY` (generata automaticamente, oppure passala come variabile d'ambiente). `docker compose down -v` cancella anche il database locale.

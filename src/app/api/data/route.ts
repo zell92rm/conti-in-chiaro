@@ -143,10 +143,22 @@ const sensibleAssociationKeywords = (description: string, details?: string | nul
     .filter((word) => word.length >= 3 && word.length <= 24 && !automaticKeywordStopWords.has(word) && !/\d{4,}/.test(word)),
 )).slice(0, 8);
 
-async function learnAssociationKeywords(ownerEmail: string, transaction: { description: string; details?: string | null }, categoryName?: string | null, fixedExpenseId?: number | null) {
+type KeywordConflict = { scope: KeywordScope; keyword: string; holderId: number; holderName: string; targetId: number; targetName: string };
+
+// Restituisce i conflitti tra una parola appresa e una parola MANUALE già assegnata ad un'altra voce: li decide l'utente.
+async function learnAssociationKeywords(ownerEmail: string, transaction: { description: string; details?: string | null }, categoryName?: string | null, fixedExpenseId?: number | null): Promise<KeywordConflict[]> {
   const learned = sensibleAssociationKeywords(transaction.description, transaction.details);
-  if (!learned.length) return;
+  const askConflicts: KeywordConflict[] = [];
+  if (!learned.length) return askConflicts;
   const db = getDb();
+  const queueConflict = async (scope: KeywordScope, keyword: string, holderId: number, targetId: number, targetName: string) => {
+    const [dismissed] = await db.select({ id: appFlags.id }).from(appFlags).where(eq(appFlags.id, `${ownerEmail}:kwc:${scope}:${keyword}:${targetId}`)).limit(1);
+    if (dismissed || askConflicts.some((item) => item.scope === scope && item.keyword === keyword && item.targetId === targetId)) return;
+    const [holder] = scope === "category"
+      ? await db.select({ name: categories.name }).from(categories).where(and(eq(categories.ownerEmail, ownerEmail), eq(categories.id, holderId))).limit(1)
+      : await db.select({ name: fixedExpenses.name }).from(fixedExpenses).where(and(eq(fixedExpenses.ownerEmail, ownerEmail), eq(fixedExpenses.id, holderId))).limit(1);
+    askConflicts.push({ scope, keyword, holderId, holderName: holder?.name || "un'altra voce", targetId, targetName });
+  };
   if (categoryName && categoryName !== "Altro") {
     const [category] = await db.select({ id: categories.id }).from(categories).where(and(eq(categories.ownerEmail, ownerEmail), eq(categories.name, categoryName))).limit(1);
     if (category) {
@@ -157,7 +169,8 @@ async function learnAssociationKeywords(ownerEmail: string, transaction: { descr
         ]);
         if (blacklisted.some((row) => normalizeKeyword(row.keyword) === keyword) || existing.some((row) => row.categoryId === category.id && normalizeKeyword(row.keyword) === keyword)) continue;
         const conflicts = existing.filter((row) => row.categoryId !== category.id && normalizeKeyword(row.keyword) === keyword);
-        if (conflicts.some((row) => row.source !== "automatic")) continue;
+        const manualCategoryHolder = conflicts.find((row) => row.source !== "automatic");
+        if (manualCategoryHolder) { await queueConflict("category", keyword, manualCategoryHolder.categoryId, category.id, categoryName); continue; }
         if (conflicts.length) {
           await db.batch([
             db.delete(categoryKeywords).where(and(eq(categoryKeywords.ownerEmail, ownerEmail), inArray(categoryKeywords.id, conflicts.filter((row) => row.source === "automatic").map((row) => row.id)))),
@@ -186,7 +199,8 @@ async function learnAssociationKeywords(ownerEmail: string, transaction: { descr
         ]);
         if (blacklisted.some((row) => normalizeKeyword(row.keyword) === keyword) || targetKeywords.includes(keyword)) continue;
         const conflicts = sources.filter((source) => source.fixedExpenseId !== expense.id && normalizeKeyword(source.keyword) === keyword);
-        if (conflicts.some((source) => source.source !== "automatic")) continue;
+        const manualExpenseHolder = conflicts.find((source) => source.source !== "automatic");
+        if (manualExpenseHolder) { await queueConflict("fixed_expense", keyword, manualExpenseHolder.fixedExpenseId, expense.id, expense.name); continue; }
         if (conflicts.length) {
           const conflictingExpenses = allExpenses.filter((item) => conflicts.some((source) => source.fixedExpenseId === item.id));
           await db.batch([
@@ -204,9 +218,58 @@ async function learnAssociationKeywords(ownerEmail: string, transaction: { descr
       }
     }
   }
+  return askConflicts;
 }
 
-async function validateManualKeywords(ownerEmail: string, scope: KeywordScope, entityId: number | null, values: unknown): Promise<{ keywords: string[]; error?: string }> {
+const keywordConflictResponse = (validation: { error?: string; conflict?: { keyword: string; holder: string } }, scope: KeywordScope) =>
+  Response.json({ error: validation.error, ...(validation.conflict ? { blockedKeyword: validation.conflict.keyword, holder: validation.conflict.holder, canBlacklist: true, scope } : {}) }, { status: 409 });
+
+async function blacklistKeyword(ownerEmail: string, scope: KeywordScope, keyword: string) {
+  const db = getDb();
+  if (scope === "category") {
+    await db.batch([
+      db.delete(categoryKeywords).where(and(eq(categoryKeywords.ownerEmail, ownerEmail), eq(categoryKeywords.keyword, keyword))),
+      db.insert(keywordBlacklists).values({ ownerEmail, scope, keyword, source: "manual", createdAt: now() }).onConflictDoNothing(),
+    ]);
+  } else {
+    const expenses = await db.select().from(fixedExpenses).where(eq(fixedExpenses.ownerEmail, ownerEmail));
+    await db.batch([
+      db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, ownerEmail), eq(fixedExpenseKeywordSources.keyword, keyword))),
+      ...expenses.filter((expense) => parseFixedExpenseKeywords(expense.keywords).includes(keyword)).map((expense) => db.update(fixedExpenses).set({ keywords: JSON.stringify(parseFixedExpenseKeywords(expense.keywords).filter((value) => value !== keyword)) }).where(eq(fixedExpenses.id, expense.id))),
+      db.insert(keywordBlacklists).values({ ownerEmail, scope, keyword, source: "manual", createdAt: now() }).onConflictDoNothing(),
+    ]);
+  }
+}
+
+// Sposta una parola chiave (scelta esplicita dell'utente, quindi "manuale") dalle voci che la usano a quella di destinazione.
+async function moveKeyword(ownerEmail: string, scope: KeywordScope, keyword: string, targetId: number) {
+  const db = getDb();
+  const blacklisted = await db.select({ id: keywordBlacklists.id }).from(keywordBlacklists).where(and(eq(keywordBlacklists.ownerEmail, ownerEmail), eq(keywordBlacklists.scope, scope), eq(keywordBlacklists.keyword, keyword))).limit(1);
+  if (blacklisted.length) return;
+  if (scope === "category") {
+    const [target] = await db.select({ id: categories.id }).from(categories).where(and(eq(categories.ownerEmail, ownerEmail), eq(categories.id, targetId))).limit(1);
+    if (!target) return;
+    const holders = await db.select().from(categoryKeywords).where(and(eq(categoryKeywords.ownerEmail, ownerEmail), eq(categoryKeywords.keyword, keyword)));
+    const others = holders.filter((row) => row.categoryId !== targetId).map((row) => row.id);
+    await (db as any).batch([
+      ...(others.length ? [db.delete(categoryKeywords).where(and(eq(categoryKeywords.ownerEmail, ownerEmail), inArray(categoryKeywords.id, others)))] : []),
+      db.insert(categoryKeywords).values({ ownerEmail, categoryId: targetId, keyword, source: "manual" }).onConflictDoUpdate({ target: [categoryKeywords.ownerEmail, categoryKeywords.categoryId, categoryKeywords.keyword], set: { source: "manual" } }),
+    ]);
+    return;
+  }
+  const expenses = await db.select().from(fixedExpenses).where(eq(fixedExpenses.ownerEmail, ownerEmail));
+  const target = expenses.find((expense) => expense.id === targetId);
+  if (!target) return;
+  const targetKeywords = parseFixedExpenseKeywords(target.keywords);
+  await (db as any).batch([
+    ...expenses.filter((expense) => expense.id !== targetId && parseFixedExpenseKeywords(expense.keywords).includes(keyword)).map((expense) => db.update(fixedExpenses).set({ keywords: JSON.stringify(parseFixedExpenseKeywords(expense.keywords).filter((value) => value !== keyword)) }).where(eq(fixedExpenses.id, expense.id))),
+    db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, ownerEmail), eq(fixedExpenseKeywordSources.keyword, keyword))),
+    db.update(fixedExpenses).set({ keywords: JSON.stringify(targetKeywords.includes(keyword) ? targetKeywords : [...targetKeywords, keyword]) }).where(eq(fixedExpenses.id, targetId)),
+    db.insert(fixedExpenseKeywordSources).values({ ownerEmail, fixedExpenseId: targetId, keyword, source: "manual" }).onConflictDoNothing(),
+  ]);
+}
+
+async function validateManualKeywords(ownerEmail: string, scope: KeywordScope, entityId: number | null, values: unknown): Promise<{ keywords: string[]; error?: string; conflict?: { keyword: string; holder: string } }> {
   const keywords = cleanKeywords(values);
   const db = getDb();
   const blacklist = await db.select().from(keywordBlacklists).where(and(eq(keywordBlacklists.ownerEmail, ownerEmail), eq(keywordBlacklists.scope, scope)));
@@ -218,13 +281,13 @@ async function validateManualKeywords(ownerEmail: string, scope: KeywordScope, e
       db.select({ id: categories.id, name: categories.name }).from(categories).where(eq(categories.ownerEmail, ownerEmail)),
     ]);
     const conflict = rows.find((row) => row.categoryId !== entityId && keywords.includes(normalizeKeyword(row.keyword)));
-    if (conflict) return { error: `La parola chiave "${normalizeKeyword(conflict.keyword)}" è già utilizzata dalla categoria "${categoryRows.find((item) => item.id === conflict.categoryId)?.name || "un'altra categoria"}".`, keywords };
+    if (conflict) { const holder = categoryRows.find((item) => item.id === conflict.categoryId)?.name || "un'altra categoria"; return { error: `La parola chiave "${normalizeKeyword(conflict.keyword)}" è già utilizzata dalla categoria "${holder}".`, keywords, conflict: { keyword: normalizeKeyword(conflict.keyword), holder } }; }
   } else {
     const expenses = await db.select().from(fixedExpenses).where(eq(fixedExpenses.ownerEmail, ownerEmail));
     const conflictExpense = expenses.find((expense) => expense.id !== entityId && parseFixedExpenseKeywords(expense.keywords).some((keyword) => keywords.includes(keyword)));
     if (conflictExpense) {
       const conflict = parseFixedExpenseKeywords(conflictExpense.keywords).find((keyword) => keywords.includes(keyword));
-      return { error: `La parola chiave "${conflict}" è già utilizzata dalla spesa fissa "${conflictExpense.name}".`, keywords };
+      return { error: `La parola chiave "${conflict}" è già utilizzata dalla spesa fissa "${conflictExpense.name}".`, keywords, conflict: { keyword: String(conflict), holder: conflictExpense.name } };
     }
   }
   return { keywords };
@@ -400,6 +463,7 @@ export async function GET() {
     const stored = recurringSkips.find((item) => item.id === skip.id);
     if (stored && stored.month !== skip.month) try { await db.update(fixedExpenseSkips).set({ month: skip.month }).where(eq(fixedExpenseSkips.id, skip.id)); } catch { /* A normalized record for this cycle already exists. */ }
   }
+  const fixedSourceRows = await db.select().from(fixedExpenseKeywordSources).where(eq(fixedExpenseKeywordSources.ownerEmail, user.email));
   const homeAccountId = configuredHomeAccountId !== null && a.some((account) => account.id === configuredHomeAccountId)
     ? configuredHomeAccountId
     : null;
@@ -416,10 +480,12 @@ export async function GET() {
     categories: categoryRows.map((category) => ({
       ...category,
       keywords: keywordRows.filter((row) => row.categoryId === category.id).map((row) => row.keyword),
+      keywordSources: Object.fromEntries(keywordRows.filter((row) => row.categoryId === category.id).map((row) => [row.keyword, row.source === "automatic" ? "automatic" : "manual"])),
     })),
     fixedExpenses: recurring.map((expense) => ({
       ...expense,
       keywords: parseFixedExpenseKeywords(expense.keywords).filter((keyword) => !duplicateFixedKeywords.includes(keyword) && !blockedFixedKeywords.includes(keyword)),
+      keywordSources: Object.fromEntries(parseFixedExpenseKeywords(expense.keywords).map((keyword) => [keyword, fixedSourceRows.find((source) => source.fixedExpenseId === expense.id && source.keyword === keyword)?.source === "automatic" ? "automatic" : "manual"])),
       payments: normalizedRecurringPayments.filter((payment) => payment.fixedExpenseId === expense.id),
       skippedMonths: normalizedRecurringSkips.filter((skip) => skip.fixedExpenseId === expense.id).map((skip) => skip.month),
     })),
@@ -427,6 +493,8 @@ export async function GET() {
     keywordBlacklists: {
       categories: blacklistRows.filter((row) => row.scope === "category").map((row) => row.keyword),
       fixedExpenses: blacklistRows.filter((row) => row.scope === "fixed_expense").map((row) => row.keyword),
+      categorySources: Object.fromEntries(blacklistRows.filter((row) => row.scope === "category").map((row) => [row.keyword, row.source === "automatic" ? "automatic" : "manual"])),
+      fixedExpenseSources: Object.fromEntries(blacklistRows.filter((row) => row.scope === "fixed_expense").map((row) => [row.keyword, row.source === "automatic" ? "automatic" : "manual"])),
     },
   });
 }
@@ -442,20 +510,20 @@ export async function POST(request: Request) {
     const scope: KeywordScope = body.scope === "fixed_expense" ? "fixed_expense" : "category";
     const keyword = normalizeKeyword(body.keyword);
     if (!keyword) return Response.json({ error: "Inserisci una parola chiave valida" }, { status: 400 });
-    if (scope === "category") {
-      await db.batch([
-        db.delete(categoryKeywords).where(and(eq(categoryKeywords.ownerEmail, user.email), eq(categoryKeywords.keyword, keyword))),
-        db.insert(keywordBlacklists).values({ ownerEmail: user.email, scope, keyword, source: "manual", createdAt: now() }).onConflictDoNothing(),
-      ]);
-    } else {
-      const expenses = await db.select().from(fixedExpenses).where(eq(fixedExpenses.ownerEmail, user.email));
-      await db.batch([
-        db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.keyword, keyword))),
-        ...expenses.filter((expense) => parseFixedExpenseKeywords(expense.keywords).includes(keyword)).map((expense) => db.update(fixedExpenses).set({ keywords: JSON.stringify(parseFixedExpenseKeywords(expense.keywords).filter((value) => value !== keyword)) }).where(eq(fixedExpenses.id, expense.id))),
-        db.insert(keywordBlacklists).values({ ownerEmail: user.email, scope, keyword, source: "manual", createdAt: now() }).onConflictDoNothing(),
-      ]);
-    }
+    await blacklistKeyword(user.email, scope, keyword);
     return Response.json({ ok: true, keyword });
+  }
+  if (body.action === "keyword-conflict-resolve") {
+    const decisions = Array.isArray(body.decisions) ? body.decisions.slice(0, 100) : [];
+    for (const item of decisions) {
+      const scope: KeywordScope = item?.scope === "fixed_expense" ? "fixed_expense" : "category";
+      const keyword = normalizeKeyword(item?.keyword), targetId = Number(item?.targetId);
+      if (!keyword || !Number.isInteger(targetId) || targetId < 1) continue;
+      if (item.action === "blacklist") await blacklistKeyword(user.email, scope, keyword);
+      else if (item.action === "move") await moveKeyword(user.email, scope, keyword, targetId);
+      else await db.insert(appFlags).values({ id: `${user.email}:kwc:${scope}:${keyword}:${targetId}`, ownerEmail: user.email, key: "keyword-conflict-kept", value: "1" }).onConflictDoNothing();
+    }
+    return Response.json({ ok: true });
   }
   if (body.action === "keyword-blacklist-remove") {
     const scope: KeywordScope = body.scope === "fixed_expense" ? "fixed_expense" : "category";
@@ -500,7 +568,7 @@ export async function POST(request: Request) {
     if (!account || !["personale", "spese_mese"].includes(account.type) || !String(body.name || "").trim() || !Number.isFinite(amount) || amount <= 0)
       return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
     const validation = await validateManualKeywords(user.email, "fixed_expense", null, body.keywords);
-    if (validation.error) return Response.json({ error: validation.error }, { status: 409 });
+    if (validation.error) return keywordConflictResponse(validation, "fixed_expense");
     const [row] = await db.insert(fixedExpenses).values({
       ownerEmail: user.email,
       accountId,
@@ -525,7 +593,7 @@ export async function POST(request: Request) {
     const id = Number(body.id), amount = Math.abs(Number(body.amount)), name = String(body.name || "").trim();
     if (!name || !Number.isFinite(amount) || amount <= 0) return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
     const validation = await validateManualKeywords(user.email, "fixed_expense", id, body.keywords);
-    if (validation.error) return Response.json({ error: validation.error }, { status: 409 });
+    if (validation.error) return keywordConflictResponse(validation, "fixed_expense");
     const category = String(body.category || "").trim() || null, notes = String(body.notes || "").trim().slice(0, 2000) || null, keywords = JSON.stringify(validation.keywords);
     await db.update(fixedExpenses).set({ name, notes, amount, category, keywords }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
     await db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.fixedExpenseId, id)));
@@ -596,8 +664,8 @@ export async function POST(request: Request) {
     const [paymentAccount] = await db.select().from(accounts).where(and(eq(accounts.id, transaction.accountId), eq(accounts.ownerEmail, user.email))).limit(1);
     if (!paymentAccount) return Response.json({ error: "Conto non valido" }, { status: 400 });
     await db.insert(fixedExpensePayments).values({ ownerEmail: user.email, fixedExpenseId, transactionId, month: accountCycleMonth(transaction.date, paymentAccount.type), createdAt: now() }).onConflictDoNothing();
-    await learnAssociationKeywords(user.email, transaction, null, fixedExpenseId);
-    return Response.json({ ok: true });
+    const keywordConflicts = await learnAssociationKeywords(user.email, transaction, null, fixedExpenseId);
+    return Response.json({ ok: true, keywordConflicts });
   }
   if (body.action === "fixed-expense-unpaid") {
     const fixedExpenseId = Number(body.id), month = String(body.month || new Date().toISOString().slice(0, 7));
@@ -656,7 +724,7 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const validation = await validateManualKeywords(user.email, "category", null, body.keywords);
-    if (validation.error) return Response.json({ error: validation.error }, { status: 409 });
+    if (validation.error) return keywordConflictResponse(validation, "category");
     try {
       const [row] = await db
         .insert(categories)
@@ -692,7 +760,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Categoria non trovata" }, { status: 404 });
     const name = String(body.name || "").trim();
     const validation = await validateManualKeywords(user.email, "category", Number(body.id), body.keywords);
-    if (validation.error) return Response.json({ error: validation.error }, { status: 409 });
+    if (validation.error) return keywordConflictResponse(validation, "category");
     await db
       .update(transactions)
       .set({ category: name })
@@ -763,8 +831,8 @@ export async function POST(request: Request) {
           ownerEmail: user.email, fixedExpenseId, transactionId: row.id, month: accountCycleMonth(row.date, own[0].type), createdAt: now(),
         }).onConflictDoNothing();
       }
-      await learnAssociationKeywords(user.email, row, body.category || null, Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null);
-      return Response.json({ row, duplicate: false });
+      const keywordConflicts = await learnAssociationKeywords(user.email, row, body.category || null, Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null);
+      return Response.json({ row, duplicate: false, keywordConflicts });
     } catch {
       return Response.json({ error: "Impossibile salvare il movimento" }, { status: 500 });
     }
@@ -835,8 +903,8 @@ export async function POST(request: Request) {
           eq(transactions.ownerEmail, user.email), inArray(transactions.id, similarIds),
         ));
       }
-      await learnAssociationKeywords(user.email, { description, details }, (body.category || "Altro") !== existing.category ? body.category || "Altro" : null, Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null);
-      return Response.json({ ok: true });
+      const keywordConflicts = await learnAssociationKeywords(user.email, { description, details }, (body.category || "Altro") !== existing.category ? body.category || "Altro" : null, Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null);
+      return Response.json({ ok: true, keywordConflicts });
     } catch {
       return Response.json(
         { error: "Impossibile aggiornare il movimento" },
@@ -860,8 +928,8 @@ export async function POST(request: Request) {
       if (similarIds.length) where = and(eq(transactions.ownerEmail, user.email), inArray(transactions.id, similarIds));
     }
     const updated = await db.update(transactions).set({ category }).where(where).returning({ id: transactions.id });
-    await learnAssociationKeywords(user.email, existing, category, null);
-    return Response.json({ ok: true, updatedIds: updated.map((row) => row.id) });
+    const keywordConflicts = await learnAssociationKeywords(user.email, existing, category, null);
+    return Response.json({ ok: true, updatedIds: updated.map((row) => row.id), keywordConflicts });
   }
   if (body.action === "transaction-spread-update") {
     const id = Number(body.id), enabled = body.enabled === true;
@@ -870,6 +938,11 @@ export async function POST(request: Request) {
     )).limit(1);
     if (!transaction || transaction.amount >= 0)
       return Response.json({ error: "La ripartizione è disponibile solo per le uscite" }, { status: 400 });
+    const [linkedFixedExpense] = await db.select({ id: fixedExpensePayments.id }).from(fixedExpensePayments).where(and(
+      eq(fixedExpensePayments.ownerEmail, user.email), eq(fixedExpensePayments.transactionId, id),
+    )).limit(1);
+    if (linkedFixedExpense)
+      return Response.json({ error: "Una spesa fissa è già accantonata nel disponibile: non può essere spalmata" }, { status: 400 });
     await db.update(transactions).set({ spreadAcrossWeeks: enabled }).where(and(
       eq(transactions.id, id), eq(transactions.ownerEmail, user.email),
     ));
@@ -887,6 +960,7 @@ export async function POST(request: Request) {
       .limit(1);
     if (!own.length)
       return Response.json({ error: "Conto non valido" }, { status: 400 });
+    const importConflicts: KeywordConflict[] = [];
     let inserted = 0,
       duplicates = 0,
       excluded = 0,
@@ -1009,19 +1083,20 @@ export async function POST(request: Request) {
             ownerEmail: user.email, fixedExpenseId, transactionId: insertedRow.id, month: accountCycleMonth(insertedRow.date, own[0].type), createdAt: now(),
           }).onConflictDoNothing();
         }
-        if (insertedRow && (item.categoryEdited === true || (Number.isInteger(fixedExpenseId) && fixedExpenseId > 0))) await learnAssociationKeywords(
+        if (insertedRow && (item.categoryEdited === true || (Number.isInteger(fixedExpenseId) && fixedExpenseId > 0))) importConflicts.push(...await learnAssociationKeywords(
           user.email,
           insertedRow,
           item.categoryEdited === true ? insertedRow.category : null,
           Number.isInteger(fixedExpenseId) && fixedExpenseId > 0 ? fixedExpenseId : null,
-        );
+        ));
         inserted++;
       } catch {
         if (externalTransactionId) duplicates++;
         else return Response.json({ error: "Impossibile importare il movimento" }, { status: 500 });
       }
     }
-    return Response.json({ inserted, duplicates, excluded, reconciled });
+    const keywordConflicts = importConflicts.filter((item, index) => importConflicts.findIndex((other) => other.scope === item.scope && other.keyword === item.keyword && other.targetId === item.targetId) === index);
+    return Response.json({ inserted, duplicates, excluded, reconciled, keywordConflicts });
   }
   if (body.action === "delete-all") {
     await db.delete(fixedExpenseSkips).where(eq(fixedExpenseSkips.ownerEmail, user.email));

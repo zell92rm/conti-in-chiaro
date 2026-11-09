@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { reportKeywordConflicts } from "@/components/keyword-conflict-dialog";
 import { ArrowLeft, Pencil, Plus, Search, Settings, Trash2, WalletCards, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,7 +14,7 @@ import { translateDefaultCategory } from "@/lib/i18n";
 
 type Account = { id: number; name: string; type: string };
 type Category = { id: number; name: string };
-type FixedExpense = { id: number; accountId: number; name: string; notes?: string | null; category: string | null; keywords: string[]; amount: number; active: boolean; payments: Array<{ month: string; transactionId: number }>; skippedMonths: string[] };
+type FixedExpense = { id: number; accountId: number; name: string; notes?: string | null; category: string | null; keywords: string[]; keywordSources?: Record<string, string>; amount: number; active: boolean; payments: Array<{ month: string; transactionId: number }>; skippedMonths: string[] };
 type Match = { id: number; date: string; description: string; details?: string | null; amount: number; category: string };
 const currentMonth = (type = "personale") => accountCycleMonth(new Date().toISOString().slice(0, 10), type);
 const formatDate = (value: string) => new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`));
@@ -26,9 +27,9 @@ export default function AccountSettings({ accountId }: { accountId: number }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const load = async () => { setLoading(true); const data = await fetch("/api/data").then((response) => response.json()); setAccount((data.accounts || []).find((item: Account) => item.id === accountId) || null); setAccounts(data.accounts || []); setCategories(data.categories || []); setExpenses((data.fixedExpenses || []).filter((item: FixedExpense) => item.accountId === accountId)); setLoading(false); };
   useEffect(() => { load(); }, [accountId]);
-  const post = async (body: Record<string, unknown>) => { const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) setError(data.error || "Operazione non riuscita"); return data; };
-  const add = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<true | string> => { const data = await post({ action: "fixed-expense", accountId, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return String(data.error); const match = data.possibleTransactions?.[0]; if (match && confirm(`Il movimento “${match.description}” da € ${Math.abs(match.amount).toFixed(2)} sembra corrispondere. Confermi che questa spesa fissa è già pagata?`)) await post({ action: "fixed-expense-paid", fixedExpenseId: data.row.id, transactionId: match.id }); setError(""); await load(); return true; };
-  const saveEdit = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<true | string> => { if (!editingExpense) return "Spesa fissa non disponibile"; const data = await post({ action: "fixed-expense-update", id: editingExpense.id, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return String(data.error); setEditingExpense(null); setError(""); await load(); return true; };
+  const post = async (body: Record<string, unknown>) => { const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); reportKeywordConflicts(data?.keywordConflicts); if (!response.ok) setError(data.error || "Operazione non riuscita"); return data; };
+  const add = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<SaveResult> => { const data = await post({ action: "fixed-expense", accountId, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); const match = data.possibleTransactions?.[0]; if (match && confirm(`Il movimento “${match.description}” da € ${Math.abs(match.amount).toFixed(2)} sembra corrispondere. Confermi che questa spesa fissa è già pagata?`)) await post({ action: "fixed-expense-paid", fixedExpenseId: data.row.id, transactionId: match.id }); setError(""); await load(); return true; };
+  const saveEdit = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<SaveResult> => { if (!editingExpense) return "Spesa fissa non disponibile"; const data = await post({ action: "fixed-expense-update", id: editingExpense.id, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); setEditingExpense(null); setError(""); await load(); return true; };
   const editExpense = (expense: FixedExpense) => setEditingExpense(expense);
   const toggleActive = async (expense: FixedExpense) => { const active = expense.active === false; if (!active && !confirm(`Disabilitare definitivamente la spesa fissa “${expense.name}”? Potrai riattivarla dalle impostazioni.`)) return; const data = await post({ action: "fixed-expense-active", id: expense.id, active }); if (!data.error) { setError(""); await load(); } };
   const toggleSkip = async (expense: FixedExpense) => { await post({ action: "fixed-expense-skip", id: expense.id, month: currentMonth(account?.type) }); await load(); };
@@ -89,7 +90,8 @@ function MoveFixedExpense({ expense, accounts, moved }: { expense: FixedExpense;
   </>;
 }
 
-type FixedExpenseSave = (name: string, amount: string, category: string, keywords: string[], notes: string) => Promise<true | string>;
+type SaveResult = true | string | { error: string; keyword: string; holder: string };
+type FixedExpenseSave = (name: string, amount: string, category: string, keywords: string[], notes: string) => Promise<SaveResult>;
 
 function FixedExpenseForm({ categories, save, initial }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense }) {
   const [open, setOpen] = useState(false);
@@ -120,6 +122,16 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
   const [keywords, setKeywords] = useState<string[]>(initial?.keywords || []);
   const [keyword, setKeyword] = useState("");
   const [formError, setFormError] = useState("");
+  const [conflict, setConflict] = useState<{ keyword: string; holder: string } | null>(null);
+  const blacklistConflict = async () => {
+    if (!conflict) return;
+    if (!confirm(`La parola “${conflict.keyword}” verrà rimossa da “${conflict.holder}” e messa in blacklist: non potrà più essere usata né appresa automaticamente. Procedere?`)) return;
+    const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "keyword-blacklist-add", scope: "fixed_expense", keyword: conflict.keyword }) });
+    const data = await response.json();
+    if (!response.ok) { setFormError(data.error || "Operazione non riuscita"); return; }
+    setKeywords((current) => current.filter((value) => value !== conflict.keyword));
+    setConflict(null); setFormError("");
+  };
 
   const normalizedKeyword = () => normalizeKeyword(keyword);
   const addKeyword = () => {
@@ -143,7 +155,8 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
       setKeywords([]);
       setKeyword("");
       setFormError("");
-    } else setFormError(saved);
+    } else if (typeof saved === "string") { setFormError(saved); setConflict(null); }
+    else { setFormError(saved.error); setConflict({ keyword: saved.keyword, holder: saved.holder }); }
   }}>
     <label className="field"><span>Nome</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="Es. Affitto"/></label>
     <label className="field"><span>Importo previsto</span><input required type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)}/></label>
@@ -157,11 +170,12 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
         <Button type="button" variant="outline" onClick={addKeyword} disabled={!keyword.trim()}><Plus size={14}/> Aggiungi</Button>
       </div>
       <div className="keyword-list">
-        {keywords.map((item) => <span className="keyword-chip" key={item}>{item}<button type="button" aria-label={`Rimuovi ${item}`} onClick={() => setKeywords((current) => current.filter((value) => value !== item))}><X size={13}/></button></span>)}
+        {keywords.map((item) => <span className={`keyword-chip ${initial?.keywordSources?.[item] === "automatic" ? "kw-auto" : "kw-manual"}`} key={item}>{item}<i className="kw-origin">{initial?.keywordSources?.[item] === "automatic" ? "automatica" : "manuale"}</i><button type="button" aria-label={`Rimuovi ${item}`} onClick={() => setKeywords((current) => current.filter((value) => value !== item))}><X size={13}/></button></span>)}
         {!keywords.length && <small>Nessuna parola chiave configurata.</small>}
       </div>
     </fieldset>
     {formError && <p className="error">{formError}</p>}
+    {conflict && <Button type="button" variant="outline" onClick={blacklistConflict}>Metti “{conflict.keyword}” in blacklist</Button>}
     <Button>{initial ? <Pencil size={15}/> : <Plus size={15}/>} {initial ? "Salva modifiche" : "Crea spesa fissa"}</Button>
   </form>;
 }

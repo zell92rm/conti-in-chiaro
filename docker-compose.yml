@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5173:5173"
+      - "80:5173"    # permette di aprire http://localhost anche senza porta
+    environment:
+      # 1 = HTTP semplice (http://localhost:5173), 0 = HTTPS autofirmato (https://localhost:5173)
+      DEV_HTTP: "${DEV_HTTP:-1}"
+      # Facoltativo: chiave Base64 di 32 byte (es. `openssl rand -base64 32`). Se vuota ne viene generata una e conservata nel volume.
+      OPEN_BANKING_ENCRYPTION_KEY: "${OPEN_BANKING_ENCRYPTION_KEY:-}"
+    volumes:
+      # Il codice è copiato nell'immagine (avvio veloce): dopo ogni modifica serve `docker compose up --build`.
+      - data:/app/.wrangler   # database, stato locale e chiave: sopravvivono ai riavvii
+volumes:
+  data:

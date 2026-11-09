@@ -2,16 +2,12 @@ import vinext from "vinext";
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import hostingConfig from "./.deployment/hosting.json";
-import { sites } from "./build/sites-vite-plugin";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00496783-18d0-4f56-9f6d-63f9920e2add";
 const WORKER_COMPATIBILITY_DATE = "2026-05-22";
 
 const { d1, r2 } = hostingConfig;
-
-// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
-const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 const localBindingConfig = {
   main: "./src/worker/index.ts",
@@ -52,22 +48,21 @@ export default defineConfig(async () => {
       host: "0.0.0.0",
       port: 5173,
       strictPort: true,
-      allowedHosts: ["localhost", "127.0.0.1", "terminal.local", "pcs5.reply"],
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
-        : {}),
+      allowedHosts: ["localhost", "127.0.0.1"],
     },
     plugins: [
-      {
-        ...basicSsl({
-          name: "conti-in-chiaro-local",
-          domains: ["localhost", "terminal.local"],
-          ttlDays: 365,
-        }),
-        apply: "serve" as const,
-      },
+      // HTTPS autofirmato in sviluppo; con DEV_HTTP=1 (usato da Docker) il server risponde in HTTP semplice.
+      ...(process.env.DEV_HTTP === "1"
+        ? []
+        : [{
+            ...basicSsl({
+              name: "conti-in-chiaro-local",
+              domains: ["localhost"],
+              ttlDays: 365,
+            }),
+            apply: "serve" as const,
+          }]),
       vinext(),
-      sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,

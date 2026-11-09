@@ -79,3 +79,6 @@ next-env.d.ts
 /outputs/
 /work/
 /.idea/
+# docker
+/docker-data/
+*.tsbuildinfo

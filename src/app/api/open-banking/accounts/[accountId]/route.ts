@@ -3,7 +3,6 @@ import { assertSameOrigin, getCurrentUser } from "../../../../auth";
 import { getDb } from "../../../../../db";
 import { accounts, accountOpenBankingLinks, openBankingAuthorizations } from "../../../../../db/schema";
 import { enableBankingFetch } from "../../../../../lib/enable-banking-client";
-import { ENABLE_BANKING_REDIRECT_URL } from "../../../../../lib/open-banking-urls";
 
 const PROVIDER = "ENABLE_BANKING";
 const now = () => new Date().toISOString();
@@ -74,7 +73,12 @@ async function selectAccount(userId: number, accountId: number, authorizationId:
 
 async function ownsAccount(accountId: number, email: string) { if (!Number.isInteger(accountId) || accountId < 1) return false; return !!(await getDb().select({ id: accounts.id }).from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.ownerEmail, email))).limit(1))[0]; }
 function randomState() { const bytes = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
-function callbackUrlForRequest(request: Request) { const origin = request.headers.get("origin"); if (!origin) return ENABLE_BANKING_REDIRECT_URL; try { const url = new URL(origin); if (url.protocol !== "https:") return ENABLE_BANKING_REDIRECT_URL; return new URL("/api/open-banking/callback", url).toString(); } catch { return ENABLE_BANKING_REDIRECT_URL; } }
+// Il redirect usa sempre il sito da cui arriva la richiesta (header Origin, altrimenti l'origine di request.url): nessun dominio scritto nel codice.
+function callbackUrlForRequest(request: Request) {
+  let base = new URL(request.url).origin;
+  try { const origin = request.headers.get("origin"); if (origin) base = new URL(origin).origin; } catch { /* Origin non valido: si usa request.url */ }
+  return new URL("/api/open-banking/callback", base).toString();
+}
 async function sha256(value: string) { const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); return btoa(String.fromCharCode(...bytes)); }
 type Candidate = { uid: string; label: string };
 function parseCandidates(value: string | null | undefined): Candidate[] { try { const parsed = JSON.parse(value || "[]"); return Array.isArray(parsed) ? parsed.filter(item => typeof item?.uid === "string" && typeof item?.label === "string") : []; } catch { return []; } }
