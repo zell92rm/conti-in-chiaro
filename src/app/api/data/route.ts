@@ -1154,7 +1154,7 @@ export async function DELETE(request: Request) {
   if (!user)
     return Response.json({ error: "Accesso richiesto" }, { status: 401 });
   await ensureUserSettingsSchema();
-  const payload = (await request.json()) as { id: number; kind?: string };
+  const payload = (await request.json()) as { id: number; kind?: string; replacementId?: number | null };
   if (payload.kind === "fixed-expense") {
     await getDb().delete(fixedExpenseSkips).where(and(eq(fixedExpenseSkips.ownerEmail, user.email), eq(fixedExpenseSkips.fixedExpenseId, Number(payload.id))));
     await getDb().delete(fixedExpensePayments).where(and(eq(fixedExpensePayments.ownerEmail, user.email), eq(fixedExpensePayments.fixedExpenseId, Number(payload.id))));
@@ -1184,14 +1184,23 @@ export async function DELETE(request: Request) {
         ),
       )
       .limit(1);
-    if (used.length)
-      return Response.json(
-        {
-          error:
-            "Questa categoria è usata da alcuni movimenti. Rinominala invece di eliminarla.",
-        },
-        { status: 409 },
-      );
+    const replacementId = payload.replacementId == null ? null : Number(payload.replacementId);
+    let replacementName: string | null = null;
+    if (replacementId !== null) {
+      const [replacement] = await getDb().select().from(categories).where(and(eq(categories.id, replacementId), eq(categories.ownerEmail, user.email))).limit(1);
+      if (!replacement || replacement.id === current[0].id)
+        return Response.json({ error: "Categoria sostitutiva non valida" }, { status: 400 });
+      replacementName = replacement.name;
+    }
+    if (used.length) {
+      if (!replacementName) {
+        const usedCount = (await getDb().select({ id: transactions.id }).from(transactions).where(and(eq(transactions.ownerEmail, user.email), eq(transactions.category, current[0].name)))).length;
+        return Response.json({ error: "Questa categoria è usata da alcuni movimenti: scegli la categoria con cui sostituirla.", inUse: true, count: usedCount }, { status: 409 });
+      }
+      await getDb().update(transactions).set({ category: replacementName }).where(and(eq(transactions.ownerEmail, user.email), eq(transactions.category, current[0].name)));
+    }
+    // Le spese fisse che puntavano a questa categoria passano alla sostituta (o tornano a "qualsiasi categoria").
+    await getDb().update(fixedExpenses).set({ category: replacementName }).where(and(eq(fixedExpenses.ownerEmail, user.email), eq(fixedExpenses.category, current[0].name)));
     await getDb()
       .delete(categoryKeywords)
       .where(and(eq(categoryKeywords.ownerEmail, user.email), eq(categoryKeywords.categoryId, Number(payload.id))));
