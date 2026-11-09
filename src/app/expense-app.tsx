@@ -445,7 +445,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
               <DialogTrigger className="mobile-quick-action import-action" onClick={() => { setMobileMenuOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} render={<Button variant="outline" />}>
                 <Upload size={17} /> <span>Importa estratto</span>
               </DialogTrigger>
-              <DialogContent className="import-dialog" onOpenAutoFocus={(event) => { event.preventDefault(); const dialog = event.currentTarget; requestAnimationFrame(() => dialog.focus()); }}>
+              <DialogContent className="import-dialog" onOpenAutoFocus={(event) => { event.preventDefault(); const dialog = event.currentTarget as HTMLElement | null; requestAnimationFrame(() => dialog?.focus()); }}>
                 <ImportForm
                   key={`${accountFilter}-${importOpen}-${bankImport ? "bank" : "file"}`}
                   accounts={accounts}
@@ -458,7 +458,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                   source={bankImport ? "enable_banking" : "import"}
                   lockedAccount={!!bankImport}
                   reject={() => { setBankImport(null); setImportOpen(false); }}
-                  done={async (m) => {
+                  done={async (m: string) => {
                     setMessage(m);
                     setImportOpen(false);
                     setBankImport(null);
@@ -1541,14 +1541,14 @@ function autoCategory(text: string, amount: number, categories: Category[]) {
   ];
   for (const [keys, names] of rules)
     if (keys.some((k) => t.includes(k))) {
-      const c = categories.find((c) =>
-        names.some((n) => c.name.toLowerCase().includes(n)),
+      const found = categories.find((item) =>
+        names.some((n) => item.name.toLowerCase().includes(n)),
       );
-      if (c) return c.name;
+      if (found) return found!.name;
     }
   if (amount > 0) {
-    const c = categories.find((c) => c.name.toLowerCase().includes("entr") || c.name.toLowerCase().includes("stipend"));
-    if (c) return c.name;
+    const found = categories.find((item) => item.name.toLowerCase().includes("entr") || item.name.toLowerCase().includes("stipend"));
+    if (found) return found!.name;
   }
   return (
     categories.find((c) => c.name.toLowerCase() === "altro")?.name ||

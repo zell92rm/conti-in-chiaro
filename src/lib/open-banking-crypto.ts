@@ -9,7 +9,7 @@ function base64(bytes: Uint8Array): string {
   return btoa(value);
 }
 
-function fromBase64(value: string): Uint8Array {
+function fromBase64(value: string): Uint8Array<ArrayBuffer> {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   return Uint8Array.from(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")), character => character.charCodeAt(0));
 }
@@ -17,14 +17,14 @@ function fromBase64(value: string): Uint8Array {
 async function encryptionKey(): Promise<CryptoKey> {
   const secret = (env as unknown as { OPEN_BANKING_ENCRYPTION_KEY?: string }).OPEN_BANKING_ENCRYPTION_KEY;
   if (!secret) throw new Error("Secret OPEN_BANKING_ENCRYPTION_KEY non configurato.");
-  let raw: Uint8Array;
+  let raw: Uint8Array<ArrayBuffer>;
   try { raw = fromBase64(secret.trim()); } catch { throw new Error("OPEN_BANKING_ENCRYPTION_KEY deve essere una chiave Base64 di 32 byte."); }
   if (raw.byteLength !== 32) throw new Error("OPEN_BANKING_ENCRYPTION_KEY deve decodificare esattamente 32 byte.");
   try { return await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]); }
   finally { raw.fill(0); }
 }
 
-function pkcs8DerFromPem(bytes: Uint8Array): Uint8Array {
+function pkcs8DerFromPem(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   if (bytes.byteLength < 256 || bytes.byteLength > 32_768) throw new Error("La private key PEM non ha una dimensione valida.");
   const pem = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/^\uFEFF/, "").trim();
   const match = pem.match(/^-----BEGIN PRIVATE KEY-----\s+([A-Za-z0-9+/=\s]+?)\s+-----END PRIVATE KEY-----$/);
@@ -49,7 +49,7 @@ export async function validatePemBytes(bytes: Uint8Array): Promise<void> {
 export async function encryptPrivateKey(bytes: Uint8Array, userId: number): Promise<{ encrypted: string; iv: string }> {
   const key = await encryptionKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(`${userId}:${PROVIDER}`) }, key, bytes);
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(`${userId}:${PROVIDER}`) }, key, bytes as Uint8Array<ArrayBuffer>);
   return { encrypted: base64(new Uint8Array(encrypted)), iv: base64(iv) };
 }
 

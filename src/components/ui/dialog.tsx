@@ -15,7 +15,7 @@ function Dialog({
 
 function DialogTrigger({
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
+}: React.ComponentProps<typeof DialogPrimitive.Trigger> & { render?: React.ReactElement }) {
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
 }
 

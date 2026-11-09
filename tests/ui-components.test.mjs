@@ -13,7 +13,7 @@ const vite = await createServer({
   appType: "custom",
   configFile: false,
   root,
-  resolve: { alias: { "@": root } },
+  resolve: { alias: { "@": path.join(root, "src") } },
   server: { middlewareMode: true },
 });
 

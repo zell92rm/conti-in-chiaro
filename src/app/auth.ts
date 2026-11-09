@@ -158,7 +158,7 @@ async function consumePasswordCheck(password: string): Promise<false> {
   await derivePassword(password, new Uint8Array(16), PASSWORD_ITERATIONS);
   return false;
 }
-async function derivePassword(password: string, salt: Uint8Array, iterations: number): Promise<string> {
+async function derivePassword(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<string> {
   if (!Number.isInteger(iterations) || iterations < 1 || iterations > PASSWORD_ITERATIONS) {
     throw new Error("Configurazione password non compatibile con Cloudflare Workers.");
   }
@@ -167,4 +167,4 @@ async function derivePassword(password: string, salt: Uint8Array, iterations: nu
   return base64(new Uint8Array(bits));
 }
 function base64(value: Uint8Array): string { return btoa(String.fromCharCode(...value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
-function fromBase64(value: string): Uint8Array { const normalized = value.replace(/-/g, "+").replace(/_/g, "/"); return Uint8Array.from(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")), (char) => char.charCodeAt(0)); }
+function fromBase64(value: string): Uint8Array<ArrayBuffer> { const normalized = value.replace(/-/g, "+").replace(/_/g, "/"); return Uint8Array.from(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")), (char) => char.charCodeAt(0)); }
