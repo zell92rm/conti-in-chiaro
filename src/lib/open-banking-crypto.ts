@@ -70,3 +70,17 @@ export async function createEnableBankingJwt(applicationId: string, pemBytes: Ui
     return `${unsigned}.${base64(signature).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
   } finally { der.fill(0); }
 }
+
+/** Cifratura generica di un segreto testuale (stessa chiave di Enable Banking, contesto autenticato diverso). */
+export async function encryptSecret(value: string, context: string): Promise<{ encrypted: string; iv: string }> {
+  const key = await encryptionKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(context) }, key, encoder.encode(value));
+  return { encrypted: base64(new Uint8Array(encrypted)), iv: base64(iv) };
+}
+
+export async function decryptSecret(encrypted: string, iv: string, context: string): Promise<string> {
+  const key = await encryptionKey();
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(iv), additionalData: encoder.encode(context) }, key, fromBase64(encrypted));
+  return new TextDecoder().decode(plain);
+}

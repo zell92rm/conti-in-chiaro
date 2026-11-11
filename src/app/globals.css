@@ -741,6 +741,9 @@ button {
   scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
 }
+.category-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 15px; }
+.category-total span { color: var(--muted); font-weight: 650; }
+.category-total b { color: var(--ink); }
 .category-spending-card {
   margin-top: 16px;
 }
@@ -2063,3 +2066,120 @@ button {
 .keyword-conflict li small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
 .keyword-conflict select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); }
 .keyword-conflict-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+
+/* ===== Conti personali: andamento e categorie sulla stessa riga (desktop) ===== */
+.personal-analysis-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+  gap: 13px;
+  margin-top: 13px;
+  align-items: stretch;
+}
+.personal-analysis-row > .panel { display: flex; flex-direction: column; min-width: 0; }
+.personal-analysis-row .balance-line-chart { flex: 1 1 auto; min-height: 300px; }
+.personal-analysis-row .category-spending-scroll { flex: 1 1 auto; max-height: 360px; }
+.personal-analysis-row .category-spending-card:first-child { margin-top: 12px; }
+@media (max-width: 1050px) {
+  .personal-analysis-row { grid-template-columns: minmax(0, 1fr); }
+  .personal-analysis-row .category-spending-scroll { max-height: 320px; }
+}
+
+/* ===== Responsive smartphone: layout fluido, nessun overflow orizzontale ===== */
+@media (max-width: 760px) {
+  html, body { max-width: 100%; overflow-x: hidden; }
+  body { min-height: 100dvh; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  img, svg, canvas, video { max-width: 100%; }
+  input, select, textarea { font-size: max(16px, 1em); } /* evita lo zoom automatico di iOS */
+  .content, .content > *, .panel, .metric, .settings-panel, .account, .savings-hero { min-width: 0; max-width: 100%; }
+  .content { padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right)); }
+  .personal-analysis-row { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+  .personal-analysis-row > .panel { min-width: 0; padding: 18px 10px 14px; overflow: hidden; border-radius: 16px; }
+  .personal-analysis-row .panel-title { padding-inline: 6px; }
+  .personal-analysis-row .balance-line-chart { flex: none; height: 250px; min-height: 0; }
+  .personal-analysis-row .category-spending-scroll { max-height: 50dvh; padding-inline: 6px 8px; }
+  .category-kind-toggle, .category-total { margin-inline: 6px; }
+  .panel-title { flex-wrap: wrap; }
+  .panel-title h2 { overflow-wrap: anywhere; }
+  .metric strong { overflow-wrap: anywhere; }
+  .category { min-width: 0; }
+  .category > span { min-width: 0; overflow-wrap: anywhere; }
+  .month-navigation label { min-width: 0; }
+  [data-slot="dialog-content"] { width: calc(100vw - 24px); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; }
+}
+@media (max-width: 380px) {
+  .content { padding-inline: 10px; }
+  .panel-title h2 { font-size: 18px; }
+  .monthly-deltas { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Smartphone: tabella movimenti a larghezza schermo, colonne strette e testo a capo */
+@media (max-width: 760px) {
+  .table-panel { max-height: none; max-width: 100%; padding: 6px 4px 8px; overflow-x: hidden; }
+  .table-panel [data-slot="table-container"] { overflow-x: hidden; width: 100%; }
+  .table-panel table { width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; font-size: 11px; }
+  .table-panel th, .table-panel td, .table-panel th:nth-child(n), .table-panel td:nth-child(n) {
+    width: auto; min-width: 0; padding: 7px 3px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word; vertical-align: top; line-height: 1.25;
+  }
+  .table-panel th.transaction-date-cell, .table-panel td.transaction-date-cell { width: 11%; }
+  .table-panel th.transaction-category-cell, .table-panel td.transaction-category-cell { width: 25%; }
+  .table-panel th.transaction-amount-cell, .table-panel td.transaction-amount-cell { width: 19%; text-align: right; white-space: normal; }
+  .table-panel th:last-child, .table-panel td:last-child { width: 34px; padding-inline: 1px; }
+  .table-panel .inline-category-select { width: 100%; min-width: 0; max-width: 100%; height: auto; min-height: 28px; padding: 3px 2px; font-size: 11px; white-space: normal; }
+  .table-panel .edit-tx, .table-panel .delete-transaction { width: 28px; min-width: 28px; height: 28px; flex-basis: 28px; padding: 0; font-size: 0; }
+  .table-panel .transaction-row-actions { flex-direction: column; gap: 4px; }
+  .table-panel .transaction-meta { flex-wrap: wrap; gap: 3px; }
+  .table-panel td, .table-panel td:nth-child(n) { overflow: hidden; }
+  .table-panel td[data-label="Conto"] { width: 15%; }
+  .table-panel th:nth-child(3):not(.transaction-category-cell):not(.transaction-amount-cell):not(:last-child) { width: 15%; }
+  .table-panel .transaction-description, .table-panel .transaction-description.compact-on-mobile { display: block; max-width: 100%; min-width: 0; }
+  .table-panel .transaction-description > b, .table-panel .transaction-description.compact-on-mobile > b { display: inline; max-width: 100%; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+  .table-panel .transaction-description.compact-on-mobile .desktop-transaction-description-text { display: inline; }
+  .table-panel .transaction-description.compact-on-mobile .mobile-transaction-description-text { display: none; }
+  .table-panel .transaction-detail-trigger { display: inline-grid; vertical-align: middle; width: 22px; height: 22px; min-height: 22px; margin-left: 2px; font-size: 15px; }
+  .preview-filters { flex-wrap: wrap; overflow-x: visible; margin-inline: 0; padding: 0; }
+}
+
+/* ===== Interruttore (riga-scheda) e lettura email bollette ===== */
+.switch-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+}
+.switch-row > div { display: grid; gap: 3px; min-width: 0; }
+.switch-row strong { font-size: 14px; color: var(--ink); }
+.switch-row small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.switch-row [data-slot="switch"] { flex: 0 0 auto; width: 44px; height: 26px; border: 1px solid var(--line); box-shadow: none; }
+.switch-row [data-slot="switch"][data-state="checked"] { background: var(--sage); border-color: var(--sage); }
+.switch-row [data-slot="switch"][data-state="unchecked"] { background: #e6e1d3; }
+.switch-row [data-slot="switch"] [data-slot="switch-thumb"] { width: 20px; height: 20px; background: #fff; box-shadow: 0 1px 3px rgb(24 53 46 / 28%); }
+.switch-row [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] { transform: translateX(18px); }
+.switch-row [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] { transform: translateX(2px); }
+.switch-row [data-slot="switch"]:focus-visible { outline: 2px solid var(--sage); outline-offset: 2px; }
+.field-hint, .field-error { display: block; margin-top: 4px; font-size: 12px; line-height: 1.35; }
+.field-hint { color: var(--muted); }
+.field-error { color: #b43d25; font-weight: 650; }
+.energy-mail-body { display: grid; gap: 14px; padding: 4px 24px 24px; }
+.energy-mail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.energy-mail-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.energy-mail-help { font-size: 13px; color: var(--muted); }
+.energy-mail-help summary { cursor: pointer; font-weight: 650; color: var(--ink); }
+.energy-mail-help ol { margin: 8px 0 0 18px; display: grid; gap: 4px; }
+.energy-mail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.energy-mail-status { display: grid; gap: 4px; padding: 12px 14px; border-radius: 10px; background: #f1eee5; font-size: 13px; }
+.energy-bills { display: grid; gap: 8px; }
+.energy-bills h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.energy-bill-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 13px; }
+.energy-bill-row small { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.energy-bill-row em { font-style: normal; font-weight: 650; }
+.energy-bill-row em.applied { color: #236047; }
+.energy-bill-row em.waiting { color: var(--muted); font-weight: 500; }
+.danger-outline { color: #a53b2b; border-color: #e5b4aa; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) {
+  .energy-mail-body { padding: 4px 14px 18px; }
+  .energy-mail-grid { grid-template-columns: minmax(0, 1fr); }
+  .energy-mail-actions > * { flex: 1 1 100%; justify-content: center; min-height: 44px; }
+  .energy-bill-row { grid-template-columns: auto 1fr; row-gap: 4px; }
+  .energy-bill-row small, .energy-bill-row span:not(.tag), .energy-bill-row em { grid-column: 1 / -1; }
+  .switch-row { min-height: 56px; }
+}

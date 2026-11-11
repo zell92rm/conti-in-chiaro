@@ -14,5 +14,5 @@ interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 declare module "cloudflare:workers" {
-  export const env: { DB: D1Database; OPEN_BANKING_ENCRYPTION_KEY?: string; ASSETS?: Fetcher };
+  export const env: { DB: D1Database; OPEN_BANKING_ENCRYPTION_KEY?: string; MAIL_SYNC_TOKEN?: string; ASSETS?: Fetcher };
 }

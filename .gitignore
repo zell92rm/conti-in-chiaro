@@ -44,6 +44,7 @@ credentials.json
 /uploads/
 /backups/
 
+
 # personal financial exports
 *.csv
 *.xls
@@ -51,6 +52,7 @@ credentials.json
 *.ofx
 *.qif
 *.mt940
+/input_file_example/
 
 # backups and generic logs
 *.bak

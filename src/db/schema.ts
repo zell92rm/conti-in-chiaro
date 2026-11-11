@@ -43,6 +43,7 @@ export const accounts = sqliteTable("accounts", {
   name: text("name").notNull(),
   color: text("color").notNull().default("#173f35"),
   type: text("type").notNull().default("personale"),
+  bank: text("bank"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -160,6 +161,10 @@ export const fixedExpenses = sqliteTable("fixed_expenses", {
   keywords: text("keywords").notNull().default("[]"),
   amount: real("amount").notNull(),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  variable: integer("variable", { mode: "boolean" }).notNull().default(false),
+  onlyMonth: text("only_month"),
+  keywordsFromId: integer("keywords_from_id"),
+  supply: text("supply"),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("idx_fixed_expenses_owner_account").on(table.ownerEmail, table.accountId)]);
 
@@ -190,3 +195,58 @@ export const fixedExpenseSkips = sqliteTable("fixed_expense_skips", {
   month: text("month").notNull(),
   createdAt: text("created_at").notNull(),
 }, (table) => [uniqueIndex("fixed_expense_skips_expense_month_unique").on(table.fixedExpenseId, table.month)]);
+
+export const fixedExpenseMonthAmounts = sqliteTable("fixed_expense_month_amounts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull(),
+  fixedExpenseId: integer("fixed_expense_id").notNull(),
+  month: text("month").notNull(),
+  amount: real("amount").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [uniqueIndex("fixed_expense_month_amounts_unique").on(table.fixedExpenseId, table.month)]);
+
+export const energyMailConfigs = sqliteTable("energy_mail_configs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull(),
+  accountId: integer("account_id").notNull(),
+  provider: text("provider").notNull(),
+  imapUser: text("imap_user").notNull(),
+  encryptedPassword: text("encrypted_password").notNull(),
+  passwordIv: text("password_iv").notNull(),
+  times: text("times").notNull().default('["12:00","23:30"]'),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  lastRunAt: text("last_run_at"),
+  lastSuccessAt: text("last_success_at"),
+  runRequestedAt: text("run_requested_at"),
+  runMode: text("run_mode"),
+  runningSince: text("running_since"),
+  lastStatus: text("last_status"),
+  lastError: text("last_error"),
+  lastSummary: text("last_summary"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [uniqueIndex("energy_mail_configs_account_unique").on(table.accountId)]);
+
+export const energyBills = sqliteTable("energy_bills", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull(),
+  accountId: integer("account_id").notNull(),
+  provider: text("provider").notNull(),
+  emailId: text("email_id").notNull(),
+  receivedAt: text("received_at").notNull(),
+  supply: text("supply").notNull(),
+  consumption: real("consumption"),
+  consumptionUnit: text("consumption_unit"),
+  total: real("total"),
+  dueDate: text("due_date"),
+  periodLabel: text("period_label"),
+  subject: text("subject").notNull(),
+  appliedAt: text("applied_at"),
+  appliedExpenseId: integer("applied_expense_id"),
+  appliedMonth: text("applied_month"),
+  note: text("note"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("energy_bills_owner_email_id_unique").on(table.ownerEmail, table.emailId),
+  index("idx_energy_bills_account_supply").on(table.accountId, table.supply),
+]);

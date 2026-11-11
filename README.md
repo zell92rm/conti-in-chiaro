@@ -1,6 +1,6 @@
 # Conti in Chiaro
 
-Applicazione web full-stack per gestire conti personali, movimenti, budget, risparmi e spese fisse. Include importazioni CSV/XLSX, categorizzazione tramite parole chiave e integrazione Open Banking con Enable Banking.
+Applicazione web full-stack per gestire conti personali, movimenti, budget, risparmi e spese fisse. Include importazioni CSV/XLSX per banca, categorizzazione tramite parole chiave, bollette variabili di luce e gas aggiornate dalle email del fornitore e integrazione Open Banking con Enable Banking.
 
 > [English version](#english)
 
@@ -23,15 +23,20 @@ L'applicazione è pensata per un'installazione personale con un solo utente: il 
 - Inserimento e modifica di data, descrizione, dettaglio, importo e categoria.
 - Ricerca per descrizione, categoria, conto, data e importo.
 - Importazione CSV/XLSX con anteprima e selezione dei movimenti.
-- L'importazione da file è stata testata e configurata esclusivamente per i CSV di HYPE, i CSV di Revolut e i file XLSX di Intesa Sanpaolo. File provenienti da altri istituti o in formati differenti potrebbero non essere riconosciuti correttamente.
+- Ogni conto ha una **banca** (Intesa Sanpaolo, Hype, Revolut) scelta alla creazione e modificabile dalla Configurazione: l'importazione usa il formato di quella banca (vedi [Banche e importazione](#banche-e-importazione-degli-estratti-conto)). I conti senza banca usano il riconoscimento generico delle intestazioni.
 - Importazione dei movimenti contabilizzati (`BOOK`) tramite Enable Banking.
 - Riconoscimento dei duplicati tra inserimenti manuali, file ed Enable Banking.
 - Aggiornamenti non distruttivi quando una nuova fonte fornisce maggiori informazioni.
 - Categorie personalizzate con parole chiave e blacklist.
-- Spese fisse attivabili, disattivabili o ignorabili per un periodo.
+- Spese fisse attivabili, disattivabili o ignorabili per un periodo, con possibilità di spostarle su un altro conto.
 - Associazione delle spese fisse tramite importo, descrizione, dettaglio e parole chiave.
 - Previsioni dei saldi al netto delle spese fisse ancora da pagare.
-- Interfaccia ottimizzata per desktop e dispositivi mobili.
+- **Bollette variabili luce e gas**: sezione dedicata nelle impostazioni del conto, con importo previsto diverso per ogni periodo, seconda bolletta nello stesso periodo e fornitura (Luce/Gas) (vedi [Bollette variabili](#bollette-variabili-luce-e-gas)).
+- **Lettura automatica delle email** del fornitore di energia (Octopus Energy, via Gmail) che aggiorna da sola gli importi previsti (vedi [Lettura delle email](#lettura-automatica-delle-email-delle-bollette)).
+- Navigazione dei periodi che salta quelli senza movimenti nei conti Spese mese e Risparmi.
+- Scheda "Movimenti per categoria" con il totale di uscite o entrate, nelle viste Personale e Spese mese.
+- Esportazione e importazione dei dati (backup JSON) che conserva movimenti identici nello stesso file, importi per periodo, bollette extra e fornitura.
+- Interfaccia ottimizzata per desktop e dispositivi mobili: sui conti Personale grafico dell'andamento e movimenti per categoria sono affiancati; su smartphone la tabella dei movimenti sta nella larghezza dello schermo e il testo va a capo.
 - Interfaccia multilingua in italiano e inglese, selezionabile dalla pagina Configurazione e memorizzata nel browser.
 
 ### Stack
@@ -43,12 +48,14 @@ L'applicazione è pensata per un'installazione personale con un solo utente: il 
 - Tailwind CSS e componenti shadcn/Base UI.
 - Recharts.
 - Web Crypto API.
+- `imapflow` e `mailparser` per la lettura IMAP delle email delle bollette (worker Node nel container Docker).
 
 ### Requisiti
 
 - Node.js `>= 22.13.0` e npm.
 - Account Cloudflare con Workers e D1.
 - Facoltativamente, account Enable Banking con Application ID e private key RSA PKCS#8 PEM.
+- Facoltativamente, per la lettura delle email delle bollette: una casella Gmail con verifica in 2 passaggi e una "password per le app".
 
 ### Installazione locale
 
@@ -120,6 +127,49 @@ La sincronizzazione richiede esclusivamente transazioni contabilizzate (`transac
 
 In sviluppo locale il callback richiede un endpoint HTTPS pubblico, per esempio un Cloudflare Tunnel, registrato nel Control Panel Enable Banking.
 
+### Banche e importazione degli estratti conto
+
+La banca si sceglie alla creazione del conto (obbligatoria) e si può cambiare dalla **Configurazione**; l'elenco è in `src/lib/banks.ts`. I parser stanno in `src/lib/statement-import.ts`.
+
+| Banca | File | Colonne usate |
+| --- | --- | --- |
+| Intesa Sanpaolo | XLSX | Data (seriale Excel), Operazione, Dettagli, Importo; le righe di preambolo vengono saltate |
+| Hype | CSV | Data operazione, Descrizione, Importo ( € ) |
+| Revolut | CSV | Data di inizio, Descrizione, Importo, Costo, Valuta, State |
+
+- Revolut: si importano solo i movimenti `COMPLETATO` in EUR e l'importo finale è **Importo − Costo**.
+- Se il file non ha l'estensione della banca del conto (per esempio un CSV su un conto Intesa) l'importazione mostra un errore.
+- Per aggiungere una banca: una voce in `banks.ts` e un profilo in `statement-import.ts`.
+
+### Bollette variabili luce e gas
+
+Nelle impostazioni dei conti Personale e Spese mese le spese fisse si dividono in due sezioni: **Spese fisse mensili** (importo costante) e **Bollette variabili luce e gas** (importo diverso ogni periodo).
+
+- Un interruttore "Bolletta luce/gas a importo variabile" sposta una spesa fissa nella sezione delle bollette; ogni bolletta ha una **Fornitura** (Luce, Gas o nessuna), usata dalla lettura delle email.
+- L'importo previsto di un periodo è, in ordine: il valore di quel periodo (a mano o scritto dal servizio) → la bolletta letta dalle email per quel periodo → lo stesso mese dell'anno prima (valore salvato, bolletta letta o importo pagato) → l'ultimo valore precedente → l'importo iniziale. Quando conosci l'importo reale modifichi la spesa e il valore vale solo per quel periodo.
+- **Bolletta extra**: se in un periodo arrivano due bollette della stessa fornitura, il pulsante "Bolletta extra questo mese" (o il servizio email) crea una seconda bolletta valida solo per quel periodo. Eredita le parole chiave della bolletta originale, non modificabili e senza controllo dei conflitti; eliminando l'originale vengono eliminate anche le extra.
+- Riserva sul saldo, abbinamento ai movimenti, "segna come pagata" e "salta periodo" funzionano come per le spese fisse.
+
+### Lettura automatica delle email delle bollette
+
+Nelle impostazioni di un conto Personale o Spese mese la sezione **Lettura email delle bollette** legge le email del fornitore e aggiorna le bollette variabili.
+
+**Configurazione** (per conto): fornitore (per ora solo **Octopus Energy**), indirizzo di lettura (per ora **solo Gmail**; altri indirizzi vengono rifiutati), password per le app di Google, due orari giornalieri (predefiniti **12:00 e 23:30**, fuso Europe/Rome) e interruttore di attivazione. La password per le app si crea in Google → Sicurezza → verifica in 2 passaggi → Password per le app; viene salvata cifrata con AES-256-GCM (`OPEN_BANKING_ENCRYPTION_KEY`) e non viene mai mostrata.
+
+**Cosa legge**
+- Tutte le cartelle di Gmail, **spam e cestino compresi**, con le regole del fornitore: mittente `octopusenergy.it` e oggetto che contiene `La tua bolletta Octopus Energy - Luce` oppure `… - Gas` (anche con altro testo, per esempio `INFO - ⚡️ …`).
+- Per ogni email: fornitura, consumo fatturato, totale da pagare e scadenza. Ogni email si salva una volta sola nella tabella `energy_bills` per identificativo (Message-ID); email diverse con gli stessi importi restano entrambe.
+- **Prima esecuzione**: tutta la casella. **Successive**: solo le email del giorno corrente.
+- **Scansione completa** (pulsante): rilegge tutto e completa i dati mancanti delle bollette già salvate senza modificare quelli presenti. **Avvia ora**: esecuzione manuale immediata. Se il container resta spento, le email di quel giorno si recuperano con la scansione completa.
+
+**Cosa aggiorna**
+- Applica solo le bollette la cui **scadenza cade nel periodo attuale** del conto (periodo contabile, non mese solare): scrive il totale nell'importo del periodo della bolletta con la stessa fornitura. Dalla seconda bolletta della stessa fornitura nello stesso periodo usa la bolletta extra. Le altre restano salvate e si applicano quando il loro periodo diventa quello attuale.
+- Se non esiste una bolletta variabile con quella fornitura, l'email resta salvata con una nota e non cambia nulla.
+
+**Architettura**: la lettura IMAP la fa `scripts/mail-sync-worker.mjs`, un processo Node avviato dall'entrypoint Docker accanto al server dell'app. Ogni 30 secondi chiede a `/api/internal/mail-sync/due` quali configurazioni sono da eseguire, legge la casella e invia le email a `/api/internal/mail-sync/result`, che le interpreta (`src/lib/octopus-bill.ts`), le salva e applica gli importi (`src/lib/mail-sync.ts`). Gli endpoint interni accettano solo il token `MAIL_SYNC_TOKEN`, generato dall'entrypoint nel volume dati.
+
+> La lettura automatica funziona nell'esecuzione **Docker**. Con Cloudflare Workers la sezione di configurazione è disponibile ma non c'è uno scheduler né la lettura IMAP.
+
 ### Sicurezza
 
 - Password derivate con PBKDF2-SHA-256, salt casuale e 100.000 iterazioni; nessuna password è salvata in chiaro.
@@ -127,11 +177,27 @@ In sviluppo locale il callback richiede un endpoint HTTPS pubblico, per esempio 
 - Cookie `HttpOnly`, `Secure` in produzione e `SameSite=Lax`.
 - Blocco temporaneo di 15 minuti dopo cinque accessi falliti.
 - Private key Enable Banking validata e cifrata con AES-256-GCM e IV casuale.
+- Password per le app di Google cifrata con AES-256-GCM, mai restituita dalle API e inviata solo al worker locale tramite un endpoint protetto da token.
 - Operazioni sensibili protette da autenticazione e verifica della stessa origine.
 
 `OPEN_BANKING_ENCRYPTION_KEY` deve essere un secret e non deve essere salvato nel database o nel repository. Non cambiarlo senza una migrazione: le private key già cifrate non sarebbero più decifrabili.
 
 La password originale non è recuperabile. Non è ancora presente un flusso self-service di recupero; un reset amministrativo deve generare un nuovo hash e un nuovo salt compatibili.
+
+### Esecuzione locale con Docker
+
+```bash
+docker compose up --build
+```
+
+Apri <http://localhost:5173> (o <http://localhost>). Per usare HTTPS autofirmato avvia con `DEV_HTTP=0 docker compose up --build` e apri <https://localhost:5173>. Il codice è copiato nell'immagine: dopo ogni modifica ripeti `docker compose up --build` (senza cache se l'immagine non cambia).
+
+All'avvio l'entrypoint (`docker/entrypoint.sh`, sempre con fine riga LF grazie a `.gitattributes`):
+- genera, se mancano, la chiave `OPEN_BANKING_ENCRYPTION_KEY` e il token `MAIL_SYNC_TOKEN` (nel volume `data`; sono passabili anche come variabili d'ambiente) e li scrive in `.dev.vars`;
+- applica le migrazioni al database D1 locale, salvato nel volume `data`;
+- avvia il worker di lettura email e poi il server.
+
+`TZ=Europe/Rome` è impostato nel compose per gli orari della lettura email. `docker compose down -v` cancella anche il database locale.
 
 ### Deploy Cloudflare
 
@@ -159,13 +225,18 @@ Dopo il deploy verificare:
 ```text
 src/app/                     Pagine, dashboard e route API
 src/app/api/open-banking/    Configurazione e sincronizzazione Enable Banking
+src/app/api/energy-mail/     Configurazione e stato della lettura email delle bollette
+src/app/api/internal/        Endpoint del worker di lettura email (solo con token)
 src/app/configurazione/      Impostazioni generali e dei conti
 src/components/              Componenti condivisi
 src/db/schema.ts             Schema Drizzle per D1
 drizzle/                     Migrazioni SQL
 src/hooks/                   Hook React condivisi
-src/lib/                     Periodi, crittografia e client bancario
-scripts/                     Script di build e ambiente
+src/lib/                     Periodi, crittografia, client bancario, banche e importazione,
+                             importi delle bollette, parser Octopus, pianificazione email
+scripts/                     Script di build, ambiente e worker di lettura email
+docker/                      Entrypoint del container
+input_file_example/          Estratti conto di esempio (esclusi da git e dall'immagine)
 tests/                       Test automatici
 src/worker/index.ts          Entry point Cloudflare Worker
 wrangler.jsonc               Configurazione build e deploy
@@ -204,15 +275,20 @@ It is designed as a personal, single-user installation. The first registered acc
 - Transaction creation and editing with date, description, optional details, amount, and category.
 - Search by description, category, account, date, and amount.
 - CSV/XLSX imports with review and per-transaction selection.
-- File import has been tested and configured exclusively for HYPE CSV files, Revolut CSV files, and Intesa Sanpaolo XLSX files. Files from other institutions or in different formats may not be recognized correctly.
+- Each account has a **bank** (Intesa Sanpaolo, Hype, Revolut) chosen at creation and editable from Configuration: imports use that bank's file format (see [Banks and statement import](#banks-and-statement-import)). Accounts without a bank use generic header detection.
 - Enable Banking imports for booked (`BOOK`) transactions.
 - Duplicate detection across manual entries, files, and Enable Banking.
 - Non-destructive updates when a source provides additional information.
 - Custom categories with keywords and blacklists.
-- Fixed expenses that can be enabled, permanently disabled, or skipped for one period.
+- Fixed expenses that can be enabled, permanently disabled, skipped for one period, or moved to another account.
 - Fixed-expense matching by amount, description, details, and keywords.
 - Balance forecasts accounting for unpaid fixed expenses.
-- Desktop and mobile-optimized interface.
+- **Variable electricity and gas bills**: a dedicated section in account settings with a different expected amount per period, a second bill within the same period, and a supply (Electricity/Gas) (see [Variable bills](#variable-electricity-and-gas-bills)).
+- **Automatic email reading** for the energy supplier (Octopus Energy, via Gmail) that updates expected amounts on its own (see [Email reading](#automatic-bill-email-reading)).
+- Period navigation that skips periods without transactions in Monthly-expenses and Savings accounts.
+- A "Transactions by category" card showing the expense or income total in the Personal and Monthly-expenses views.
+- Data export/import (JSON backup) that keeps identical transactions inside the same file, per-period amounts, extra bills, and supply.
+- Desktop and mobile-optimized interface: on Personal accounts the trend chart and the category card sit side by side; on smartphones the transactions table fits the screen width and text wraps.
 - Multilingual Italian and English interface, selectable from Configuration and persisted in the browser.
 
 ### Technology stack
@@ -224,12 +300,14 @@ It is designed as a personal, single-user installation. The first registered acc
 - Tailwind CSS and shadcn/Base UI components.
 - Recharts.
 - Web Crypto API.
+- `imapflow` and `mailparser` to read bill emails over IMAP (Node worker in the Docker container).
 
 ### Requirements
 
 - Node.js `>= 22.13.0` and npm.
 - A Cloudflare account with Workers and D1.
 - Optionally, an Enable Banking account, Application ID, and RSA PKCS#8 PEM private key.
+- Optionally, for bill email reading: a Gmail mailbox with 2-step verification and an "app password".
 
 ### Local installation
 
@@ -301,6 +379,49 @@ Synchronization requests booked transactions only (`transaction_status=BOOK`). P
 
 Local callback testing requires a public HTTPS endpoint, such as a Cloudflare Tunnel, registered in the Enable Banking Control Panel.
 
+### Banks and statement import
+
+The bank is chosen when the account is created (required) and can be changed from **Configuration**; the list lives in `src/lib/banks.ts` and the parsers in `src/lib/statement-import.ts`.
+
+| Bank | File | Columns used |
+| --- | --- | --- |
+| Intesa Sanpaolo | XLSX | Date (Excel serial), Operation, Details, Amount; preamble rows are skipped |
+| Hype | CSV | Operation date, Description, Amount ( € ) |
+| Revolut | CSV | Start date, Description, Amount, Fee, Currency, State |
+
+- Revolut: only `COMPLETED` EUR movements are imported and the final amount is **Amount − Fee**.
+- A file whose extension does not match the account's bank (for example a CSV on an Intesa account) is rejected with an error.
+- To add a bank: an entry in `banks.ts` and a profile in `statement-import.ts`.
+
+### Variable electricity and gas bills
+
+In Personal and Monthly-expenses account settings, fixed expenses are split into **Monthly fixed expenses** (constant amount) and **Variable electricity and gas bills** (a different amount every period).
+
+- A "Variable-amount electricity/gas bill" switch moves a fixed expense to the bills section; each bill has a **Supply** (Electricity, Gas, or none) used by email reading.
+- The expected amount for a period is, in order: that period's value (manual or written by the service) → the bill read from email for that period → the same month last year (saved value, read bill, or paid amount) → the latest earlier value → the initial amount. When you know the real amount, edit the expense: the value applies to that period only.
+- **Extra bill**: if two bills of the same supply arrive in one period, the "Extra bill this month" button (or the email service) creates a second bill valid for that period only. It inherits the original bill's keywords, which cannot be edited and skip conflict checks; deleting the original deletes its extra bills.
+- Balance reservation, transaction matching, "mark as paid", and "skip period" work as for fixed expenses.
+
+### Automatic bill email reading
+
+In a Personal or Monthly-expenses account's settings, the **Bill email reading** section reads the supplier's emails and updates the variable bills.
+
+**Configuration** (per account): supplier (currently **Octopus Energy** only), reading address (currently **Gmail only**; other addresses are rejected), a Google app password, two daily times (default **12:00 and 23:30**, Europe/Rome), and an on/off switch. Create the app password in Google → Security → 2-step verification → App passwords; it is stored encrypted with AES-256-GCM (`OPEN_BANKING_ENCRYPTION_KEY`) and never displayed.
+
+**What it reads**
+- Every Gmail folder, **including spam and trash**, using the supplier's rules: sender `octopusenergy.it` and a subject containing `La tua bolletta Octopus Energy - Luce` or `… - Gas` (other text around it is fine, e.g. `INFO - ⚡️ …`).
+- For each email: supply, billed consumption, total due, and due date. Each email is stored once in the `energy_bills` table by its identifier (Message-ID); different emails with identical amounts are both kept.
+- **First run**: the whole mailbox. **Later runs**: only emails from the current day.
+- **Full scan** (button): rereads everything and fills in missing data on bills already stored without altering existing values. **Run now**: immediate manual run. If the container was down, that day's emails are recovered with a full scan.
+
+**What it updates**
+- It applies only bills whose **due date falls in the account's current period** (accounting period, not calendar month): the total is written to that period's amount of the bill with the same supply. From the second bill of the same supply in the same period it uses the extra bill. Others stay stored and are applied when their period becomes current.
+- If no variable bill has that supply, the email is kept with a note and nothing changes.
+
+**Architecture**: IMAP reading is done by `scripts/mail-sync-worker.mjs`, a Node process started by the Docker entrypoint next to the app server. Every 30 seconds it asks `/api/internal/mail-sync/due` which configurations should run, reads the mailbox, and posts the emails to `/api/internal/mail-sync/result`, which parses them (`src/lib/octopus-bill.ts`), stores them, and applies the amounts (`src/lib/mail-sync.ts`). The internal endpoints accept only the `MAIL_SYNC_TOKEN` token, generated by the entrypoint in the data volume.
+
+> Automatic reading works in the **Docker** setup. On Cloudflare Workers the configuration section is available but there is no scheduler or IMAP reading.
+
 ### Security
 
 - Passwords are derived with PBKDF2-SHA-256, a random salt, and 100,000 iterations; plain-text passwords are never stored.
@@ -308,11 +429,27 @@ Local callback testing requires a public HTTPS endpoint, such as a Cloudflare Tu
 - Cookies are `HttpOnly`, `Secure` in production, and `SameSite=Lax`.
 - Five failed login attempts trigger a temporary 15-minute lockout.
 - Enable Banking private keys are validated and encrypted with AES-256-GCM and a random IV.
+- The Google app password is encrypted with AES-256-GCM, never returned by the APIs, and sent only to the local worker through a token-protected endpoint.
 - Sensitive operations require authentication and same-origin validation.
 
 `OPEN_BANKING_ENCRYPTION_KEY` must be a secret and must never be stored in the database or repository. Do not rotate it without a migration plan, or existing encrypted private keys will become unreadable.
 
 The original password cannot be recovered. There is currently no self-service recovery flow; an administrative reset must generate a compatible new hash and salt.
+
+### Running locally with Docker
+
+```bash
+docker compose up --build
+```
+
+Open <http://localhost:5173> (or <http://localhost>). For self-signed HTTPS run `DEV_HTTP=0 docker compose up --build` and open <https://localhost:5173>. The code is copied into the image: after any change run `docker compose up --build` again (without cache if the image does not change).
+
+On startup the entrypoint (`docker/entrypoint.sh`, always LF line endings thanks to `.gitattributes`):
+- generates, if missing, the `OPEN_BANKING_ENCRYPTION_KEY` key and the `MAIL_SYNC_TOKEN` token (in the `data` volume; both can also be passed as environment variables) and writes them to `.dev.vars`;
+- applies migrations to the local D1 database, stored in the `data` volume;
+- starts the email-reading worker and then the server.
+
+`TZ=Europe/Rome` is set in the compose file for the email-reading schedule. `docker compose down -v` also deletes the local database.
 
 ### Cloudflare deployment
 
@@ -340,13 +477,18 @@ After deployment, verify:
 ```text
 src/app/                     Pages, dashboards, and API routes
 src/app/api/open-banking/    Enable Banking configuration and synchronization
+src/app/api/energy-mail/     Bill email reading configuration and status
+src/app/api/internal/        Email-reading worker endpoints (token only)
 src/app/configurazione/      General and account-specific settings
 src/components/              Shared components
 src/db/schema.ts             Drizzle schema for D1
 drizzle/                     SQL migrations
 src/hooks/                   Shared React hooks
-src/lib/                     Periods, cryptography, and banking client
-scripts/                     Build and environment scripts
+src/lib/                     Periods, cryptography, banking client, banks and import,
+                             bill amounts, Octopus parser, email scheduling
+scripts/                     Build, environment, and email-reading worker scripts
+docker/                      Container entrypoint
+input_file_example/          Sample statements (excluded from git and from the image)
 tests/                       Automated tests
 src/worker/index.ts          Cloudflare Worker entry point
 wrangler.jsonc               Build and deployment configuration
@@ -363,11 +505,3 @@ wrangler.d1.jsonc            D1 migration-only configuration
 ### License
 
 This project is distributed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [LICENSE](LICENSE) for the full text and the terms governing use, modification, and distribution.
-
-### Esecuzione locale con Docker
-
-```bash
-docker compose up --build
-```
-
-Apri <http://localhost:5173> (o <http://localhost>). Per usare HTTPS autofirmato avvia con `DEV_HTTP=0 docker compose up --build` e apri <https://localhost:5173>. Il codice è copiato nell'immagine: dopo ogni modifica ripeti `docker compose up --build`. Al primo avvio vengono applicate le migrazioni sul database D1 locale, salvato nel volume `data` insieme alla chiave `OPEN_BANKING_ENCRYPTION_KEY` (generata automaticamente, oppure passala come variabile d'ambiente). `docker compose down -v` cancella anche il database locale.

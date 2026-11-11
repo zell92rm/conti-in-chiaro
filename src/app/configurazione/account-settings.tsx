@@ -8,29 +8,34 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { TransactionDescription } from "@/components/transaction-description";
 import { useLocale } from "@/components/locale-provider";
 import AccountOpenBankingSettings from "./account-open-banking-settings";
+import AccountEnergyMailSettings from "./account-energy-mail-settings";
+import { Switch } from "@/components/ui/switch";
 import { accountCycleMonth } from "@/lib/account-period";
 import { normalizeKeyword } from "@/lib/keyword-policy";
 import { translateDefaultCategory } from "@/lib/i18n";
+import { appliesToMonth, expectedAmountInfo } from "@/lib/fixed-expense-amount";
 
 type Account = { id: number; name: string; type: string };
 type Category = { id: number; name: string };
-type FixedExpense = { id: number; accountId: number; name: string; notes?: string | null; category: string | null; keywords: string[]; keywordSources?: Record<string, string>; amount: number; active: boolean; payments: Array<{ month: string; transactionId: number }>; skippedMonths: string[] };
+type FixedExpense = { id: number; accountId: number; name: string; notes?: string | null; category: string | null; keywords: string[]; keywordSources?: Record<string, string>; amount: number; active: boolean; variable?: boolean; onlyMonth?: string | null; keywordsFromId?: number | null; supply?: string | null; billAmounts?: Record<string, number>; monthAmounts?: Record<string, number>; paidAmounts?: Record<string, number>; payments: Array<{ month: string; transactionId: number }>; skippedMonths: string[] };
 type Match = { id: number; date: string; description: string; details?: string | null; amount: number; category: string };
 const currentMonth = (type = "personale") => accountCycleMonth(new Date().toISOString().slice(0, 10), type);
+const monthLabel = (month: string) => new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric" }).format(new Date(`${month}-01T12:00:00`));
 const formatDate = (value: string) => new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`));
 
 export default function AccountSettings({ accountId }: { accountId: number }) {
   const { locale } = useLocale();
   const [account, setAccount] = useState<Account | null>(null), [categories, setCategories] = useState<Category[]>([]), [expenses, setExpenses] = useState<FixedExpense[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState("");
   const [searchingId, setSearchingId] = useState<number | null>(null), [searchExpense, setSearchExpense] = useState<FixedExpense | null>(null), [matches, setMatches] = useState<Match[]>([]);
-  const [editingExpense, setEditingExpense] = useState<FixedExpense | null>(null);
+  const [editingExpense, setEditingExpense] = useState<FixedExpense | null>(null), [extraFrom, setExtraFrom] = useState<FixedExpense | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const load = async () => { setLoading(true); const data = await fetch("/api/data").then((response) => response.json()); setAccount((data.accounts || []).find((item: Account) => item.id === accountId) || null); setAccounts(data.accounts || []); setCategories(data.categories || []); setExpenses((data.fixedExpenses || []).filter((item: FixedExpense) => item.accountId === accountId)); setLoading(false); };
   useEffect(() => { load(); }, [accountId]);
   const post = async (body: Record<string, unknown>) => { const response = await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); reportKeywordConflicts(data?.keywordConflicts); if (!response.ok) setError(data.error || "Operazione non riuscita"); return data; };
-  const add = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<SaveResult> => { const data = await post({ action: "fixed-expense", accountId, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); const match = data.possibleTransactions?.[0]; if (match && confirm(`Il movimento “${match.description}” da € ${Math.abs(match.amount).toFixed(2)} sembra corrispondere. Confermi che questa spesa fissa è già pagata?`)) await post({ action: "fixed-expense-paid", fixedExpenseId: data.row.id, transactionId: match.id }); setError(""); await load(); return true; };
-  const saveEdit = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<SaveResult> => { if (!editingExpense) return "Spesa fissa non disponibile"; const data = await post({ action: "fixed-expense-update", id: editingExpense.id, name, notes, amount: Number(amount.replace(",", ".")), category, keywords }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); setEditingExpense(null); setError(""); await load(); return true; };
-  const editExpense = (expense: FixedExpense) => setEditingExpense(expense);
+  const add = async (name: string, amount: string, category: string, keywords: string[], notes: string, variable = false, supply?: string, onlyMonth?: string, keywordsFromId?: number): Promise<SaveResult> => { const data = await post({ action: "fixed-expense", accountId, name, notes, amount: Number(amount.replace(",", ".")), category, keywords, variable, supply: variable ? supply || null : null, onlyMonth, keywordsFromId, month: account ? currentMonth(account.type) : undefined }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); const match = data.possibleTransactions?.[0]; if (match && confirm(`Il movimento “${match.description}” da € ${Math.abs(match.amount).toFixed(2)} sembra corrispondere. Confermi che questa spesa fissa è già pagata?`)) await post({ action: "fixed-expense-paid", fixedExpenseId: data.row.id, transactionId: match.id }); setError(""); await load(); return true; };
+  const saveEdit = async (name: string, amount: string, category: string, keywords: string[], notes: string, variable = false, supply?: string): Promise<SaveResult> => { if (!editingExpense) return "Spesa fissa non disponibile"; const data = await post({ action: "fixed-expense-update", id: editingExpense.id, name, notes, amount: Number(amount.replace(",", ".")), category, keywords, variable, supply: variable ? supply || null : null, month: account ? currentMonth(account.type) : undefined }); if (data.error) return data.canBlacklist ? { error: String(data.error), keyword: String(data.blockedKeyword), holder: String(data.holder) } : String(data.error); setEditingExpense(null); setError(""); await load(); return true; };
+  const editExpense = (expense: FixedExpense) => setEditingExpense(account && expense.variable ? { ...expense, amount: expectedAmountInfo(expense, currentMonth(account.type)).amount } : expense);
+  const addExtra = async (name: string, amount: string, category: string, keywords: string[], notes: string): Promise<SaveResult> => { if (!extraFrom) return "Spesa fissa non disponibile"; const result = await add(name, amount, category, [], notes, true, undefined, account ? currentMonth(account.type) : undefined, extraFrom.id); if (result === true) setExtraFrom(null); return result; };
   const toggleActive = async (expense: FixedExpense) => { const active = expense.active === false; if (!active && !confirm(`Disabilitare definitivamente la spesa fissa “${expense.name}”? Potrai riattivarla dalle impostazioni.`)) return; const data = await post({ action: "fixed-expense-active", id: expense.id, active }); if (!data.error) { setError(""); await load(); } };
   const toggleSkip = async (expense: FixedExpense) => { await post({ action: "fixed-expense-skip", id: expense.id, month: currentMonth(account?.type) }); await load(); };
   const restoreUnpaid = async (expense: FixedExpense) => { await post({ action: "fixed-expense-unpaid", id: expense.id, month: currentMonth(account?.type) }); await load(); };
@@ -38,12 +43,26 @@ export default function AccountSettings({ accountId }: { accountId: number }) {
   const markPaid = async (transactionId: number) => { if (!searchExpense) return; const data = await post({ action: "fixed-expense-paid", fixedExpenseId: searchExpense.id, transactionId }); if (data.error) return; setSearchExpense(null); setMatches([]); setError(""); await load(); };
   const remove = async (expense: FixedExpense) => { if (!confirm(`Eliminare la spesa fissa “${expense.name}”?`)) return; await fetch("/api/data", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "fixed-expense", id: expense.id }) }); await load(); };
 
-  if (editingExpense) return <Dialog open onOpenChange={(open) => { if (!open) setEditingExpense(null); }}><DialogContent><DialogHeader><DialogTitle>Modifica spesa fissa</DialogTitle></DialogHeader><FixedExpenseForm key={editingExpense.id} categories={categories} initial={editingExpense} save={saveEdit}/></DialogContent></Dialog>;
+  if (extraFrom && account) return <Dialog open onOpenChange={(open) => { if (!open) setExtraFrom(null); }}><DialogContent><DialogHeader><DialogTitle>Bolletta extra – {monthLabel(currentMonth(account.type))}</DialogTitle></DialogHeader><p>Seconda bolletta valida solo per questo mese: viene riservata e abbinata come le altre, ma non si ripete nei mesi successivi. Usa le stesse parole chiave della spesa originale.</p><FixedExpenseForm key={`extra-${extraFrom.id}`} categories={categories} save={addExtra} variable prefill={{ name: `${extraFrom.name} (2ª bolletta)`, amount: expectedAmountInfo(extraFrom, currentMonth(account.type)).amount, category: extraFrom.category, notes: extraFrom.notes, keywords: extraFrom.keywords }} lockedKeywords monthLabel={monthLabel(currentMonth(account.type))} inline/></DialogContent></Dialog>;
+  if (editingExpense) return <Dialog open onOpenChange={(open) => { if (!open) setEditingExpense(null); }}><DialogContent><DialogHeader><DialogTitle>Modifica spesa fissa</DialogTitle></DialogHeader><FixedExpenseForm key={editingExpense.id} categories={categories} initial={editingExpense} save={saveEdit} monthLabel={account ? monthLabel(currentMonth(account.type)) : undefined}/></DialogContent></Dialog>;
 
-  return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><WalletCards size={21}/></span><span>Conti in Chiaro</span></div><nav><a href="/"><ArrowLeft size={15}/> Panoramica</a><a href="/configurazione"><Settings size={15}/> Configurazione</a></nav></aside><section className="content settings-content"><header><div><p className="eyebrow">IMPOSTAZIONI CONTO</p><h1>{account?.name || "Conto"}</h1><p className="page-intro">Gestisci le opzioni specifiche di questo conto.</p></div><Button variant="outline" onClick={() => history.back()}><ArrowLeft size={15}/> Indietro</Button></header>{error && <div className="notice error-notice">{error}</div>}{loading ? <div className="empty">Caricamento…</div> : !account ? <div className="empty">Conto non trovato.</div> : <><AccountOpenBankingSettings accountId={accountId}/><section className="settings-panel fixed-expenses-panel"><div className="settings-heading"><div><h2>Spese fisse mensili</h2><p>Gli importi ancora da pagare vengono riservati nel calcolo del saldo spendibile.</p></div></div>{account.type === "risparmi" ? <p className="fixed-expense-empty">Le spese fisse sono disponibili solo per conti Personale e Spese mese.</p> : <><FixedExpenseForm categories={categories} save={add}/><div className="fixed-expense-list">{expenses.map((expense) => {
-    const cycleMonth = currentMonth(account.type), paid = expense.payments.some((payment) => payment.month === cycleMonth), skipped = expense.skippedMonths?.includes(cycleMonth);
-    return <article className="fixed-expense-row" key={expense.id}><div className="fixed-expense-main"><strong>{expense.name}</strong><small>{expense.category || "Qualsiasi categoria"}</small>{expense.notes && <p className="fixed-expense-notes">{expense.notes}</p>}</div><strong className="fixed-expense-amount">€ {expense.amount.toFixed(2)}</strong><span className={`fixed-expense-status ${expense.active === false ? "skipped" : paid ? "paid" : skipped ? "skipped" : "pending"}`}>{expense.active === false ? "Disabilitata" : paid ? "Pagata" : skipped ? "Saltata" : "Da pagare"}</span><div className="fixed-expense-actions">{!paid && !skipped && <MoveFixedExpense expense={expense} accounts={accounts} moved={async () => { setSearchExpense(null); setMatches([]); await load(); }}/>}<button type="button" title="Modifica nome, importo, categoria e note" onClick={() => editExpense(expense)}><Pencil size={15}/></button><button type="button" onClick={() => toggleActive(expense)}>{expense.active === false ? "Riattiva" : "Disabilita"}</button>{expense.active !== false && paid && <button type="button" onClick={() => restoreUnpaid(expense)}>Ripristina da pagare</button>}{expense.active !== false && !paid && skipped && <button type="button" onClick={() => toggleSkip(expense)}>Ripristina</button>}{expense.active !== false && !paid && !skipped && <><button type="button" onClick={() => searchTransactions(expense)}><Search size={14}/> {searchingId === expense.id ? "Ricerca…" : "Ricerca spesa nel conto"}</button><button type="button" onClick={() => toggleSkip(expense)}>Salta mese</button></>}<button className="danger" title="Elimina" onClick={() => remove(expense)}><Trash2 size={16}/></button></div>{expense.active !== false && searchExpense?.id === expense.id && <div className="fixed-expense-matches"><div className="fixed-expense-matches-heading"><strong>Movimenti più simili del mese</strong><button type="button" onClick={() => setSearchExpense(null)}>Chiudi</button></div>{searchingId === expense.id ? <p>Ricerca in corso…</p> : matches.length ? matches.map((match) => <div className="fixed-expense-match" key={match.id}><div><TransactionDescription description={match.description} details={match.details}/><small>{formatDate(match.date)} · {match.category}</small></div><strong>€ {Math.abs(match.amount).toFixed(2)}</strong><button type="button" onClick={() => markPaid(match.id)}>Segna come pagata</button></div>) : <p>Nessun movimento compatibile trovato nel mese corrente.</p>}</div>}</article>;
-  })}{!expenses.length && <p className="fixed-expense-empty">Nessuna spesa fissa configurata.</p>}</div></>}</section></>}</section></main>;
+  const renderRow = (expense: FixedExpense) => {
+    if (!account) return null;
+    const cycleMonth = currentMonth(account.type), paid = expense.payments.some((payment) => payment.month === cycleMonth), skipped = expense.skippedMonths?.includes(cycleMonth), inMonth = appliesToMonth(expense, cycleMonth);
+    const info = expectedAmountInfo(expense, cycleMonth);
+    const sourceLabel = !expense.variable ? "" : info.source === "set" ? "Importo impostato per questo mese" : info.source === "bill" ? `Dalla bolletta letta dall’email (${monthLabel(info.from!)})` : info.source === "last-year" ? `Dallo stesso mese dell’anno scorso (${monthLabel(info.from!)})` : info.source === "previous" ? `Dall’ultimo valore (${monthLabel(info.from!)})` : "Importo iniziale";
+    const status = expense.active === false ? "Disabilitata" : !inMonth ? "Non in questo mese" : paid ? "Pagata" : skipped ? "Saltata" : "Da pagare";
+    const statusClass = expense.active === false || !inMonth ? "skipped" : paid ? "paid" : skipped ? "skipped" : "pending";
+    const canAct = expense.active !== false && inMonth;
+    return <article className="fixed-expense-row" key={expense.id}><div className="fixed-expense-main"><strong>{expense.name}{expense.supply && <span className="tag"> {expense.supply === "gas" ? "Gas" : "Luce"}</span>}{expense.onlyMonth && <span className="tag"> Solo {monthLabel(expense.onlyMonth)}</span>}</strong><small>{expense.category || "Qualsiasi categoria"}</small>{sourceLabel && <small>{sourceLabel}</small>}{expense.notes && <p className="fixed-expense-notes">{expense.notes}</p>}</div><strong className="fixed-expense-amount">€ {info.amount.toFixed(2)}</strong><span className={`fixed-expense-status ${statusClass}`}>{status}</span><div className="fixed-expense-actions">{canAct && !paid && !skipped && <MoveFixedExpense expense={expense} accounts={accounts} moved={async () => { setSearchExpense(null); setMatches([]); await load(); }}/>}<button type="button" title="Modifica nome, importo, categoria e note" onClick={() => editExpense(expense)}><Pencil size={15}/></button>{expense.variable && !expense.onlyMonth && expense.active !== false && <button type="button" title="Aggiungi una seconda bolletta valida solo per questo mese" onClick={() => setExtraFrom(expense)}>Bolletta extra questo mese</button>}<button type="button" onClick={() => toggleActive(expense)}>{expense.active === false ? "Riattiva" : "Disabilita"}</button>{canAct && paid && <button type="button" onClick={() => restoreUnpaid(expense)}>Ripristina da pagare</button>}{canAct && !paid && skipped && <button type="button" onClick={() => toggleSkip(expense)}>Ripristina</button>}{canAct && !paid && !skipped && <><button type="button" onClick={() => searchTransactions(expense)}><Search size={14}/> {searchingId === expense.id ? "Ricerca…" : "Ricerca spesa nel conto"}</button><button type="button" onClick={() => toggleSkip(expense)}>Salta mese</button></>}<button className="danger" title="Elimina" onClick={() => remove(expense)}><Trash2 size={16}/></button></div>{canAct && searchExpense?.id === expense.id && <div className="fixed-expense-matches"><div className="fixed-expense-matches-heading"><strong>Movimenti più simili del mese</strong><button type="button" onClick={() => setSearchExpense(null)}>Chiudi</button></div>{searchingId === expense.id ? <p>Ricerca in corso…</p> : matches.length ? matches.map((match) => <div className="fixed-expense-match" key={match.id}><div><TransactionDescription description={match.description} details={match.details}/><small>{formatDate(match.date)} · {match.category}</small></div><strong>€ {Math.abs(match.amount).toFixed(2)}</strong><button type="button" onClick={() => markPaid(match.id)}>Segna come pagata</button></div>) : <p>Nessun movimento compatibile trovato nel mese corrente.</p>}</div>}</article>;
+  };
+  const renderSection = (variable: boolean) => {
+    if (!account) return null;
+    const list = expenses.filter((expense) => Boolean(expense.variable) === variable);
+    return <section className="settings-panel fixed-expenses-panel" key={variable ? "variable" : "fixed"}><div className="settings-heading"><div><h2>{variable ? "Bollette variabili luce e gas" : "Spese fisse mensili"}</h2><p>{variable ? "Bollette di luce e gas che cambiano ogni mese. L’importo previsto parte dalla bolletta dello stesso mese dell’anno scorso, altrimenti dall’ultima letta: si aggiorna da solo con le email del fornitore oppure a mano quando conosci l’importo reale." : "Gli importi ancora da pagare vengono riservati nel calcolo del saldo spendibile."}</p></div></div><FixedExpenseForm categories={categories} save={add} variable={variable} monthLabel={monthLabel(currentMonth(account.type))}/><div className="fixed-expense-list">{list.map(renderRow)}{!list.length && <p className="fixed-expense-empty">{variable ? "Nessuna bolletta luce/gas configurata." : "Nessuna spesa fissa configurata."}</p>}</div></section>;
+  };
+
+  return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><WalletCards size={21}/></span><span>Conti in Chiaro</span></div><nav><a href="/"><ArrowLeft size={15}/> Panoramica</a><a href="/configurazione"><Settings size={15}/> Configurazione</a></nav></aside><section className="content settings-content"><header><div><p className="eyebrow">IMPOSTAZIONI CONTO</p><h1>{account?.name || "Conto"}</h1><p className="page-intro">Gestisci le opzioni specifiche di questo conto.</p></div><Button variant="outline" onClick={() => history.back()}><ArrowLeft size={15}/> Indietro</Button></header>{error && <div className="notice error-notice">{error}</div>}{loading ? <div className="empty">Caricamento…</div> : !account ? <div className="empty">Conto non trovato.</div> : <><AccountOpenBankingSettings accountId={accountId}/>{account.type === "risparmi" ? <section className="settings-panel fixed-expenses-panel"><div className="settings-heading"><div><h2>Spese fisse mensili</h2></div></div><p className="fixed-expense-empty">Le spese fisse sono disponibili solo per conti Personale e Spese mese.</p></section> : <>{renderSection(false)}{renderSection(true)}<AccountEnergyMailSettings accountId={accountId} onApplied={load}/></>}</>}</section></main>;
 }
 
 function MoveFixedExpense({ expense, accounts, moved }: { expense: FixedExpense; accounts: Account[]; moved: () => Promise<void> }) {
@@ -91,19 +110,21 @@ function MoveFixedExpense({ expense, accounts, moved }: { expense: FixedExpense;
 }
 
 type SaveResult = true | string | { error: string; keyword: string; holder: string };
-type FixedExpenseSave = (name: string, amount: string, category: string, keywords: string[], notes: string) => Promise<SaveResult>;
+type FixedExpenseSave = (name: string, amount: string, category: string, keywords: string[], notes: string, variable?: boolean, supply?: string) => Promise<SaveResult>;
+type Prefill = { name: string; amount: number; category: string | null; notes?: string | null; keywords: string[] };
 
-function FixedExpenseForm({ categories, save, initial }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense }) {
+function FixedExpenseForm({ categories, save, initial, variable = false, monthLabel, prefill, inline = false, lockedKeywords = false }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense; variable?: boolean; monthLabel?: string; prefill?: Prefill; inline?: boolean; lockedKeywords?: boolean }) {
   const [open, setOpen] = useState(false);
 
-  if (initial) return <FixedExpenseEditor categories={categories} save={save} initial={initial}/>;
+  if (initial) return <FixedExpenseEditor categories={categories} save={save} initial={initial} monthLabel={monthLabel}/>;
+  if (inline) return <FixedExpenseEditor categories={categories} save={save} variable={variable} monthLabel={monthLabel} prefill={prefill} lockedKeywords={lockedKeywords}/>;
 
   return <>
-    <Button type="button" onClick={() => setOpen(true)}><Plus size={15}/> Aggiungi spesa fissa</Button>
+    <Button type="button" onClick={() => setOpen(true)}><Plus size={15}/> {variable ? "Aggiungi bolletta luce/gas" : "Aggiungi spesa fissa"}</Button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Nuova spesa fissa</DialogTitle></DialogHeader>
-        <FixedExpenseEditor categories={categories} save={async (...values) => {
+        <DialogHeader><DialogTitle>{variable ? "Nuova bolletta luce/gas" : "Nuova spesa fissa"}</DialogTitle></DialogHeader>
+        <FixedExpenseEditor categories={categories} variable={variable} monthLabel={monthLabel} save={async (...values) => {
           const saved = await save(...values);
           if (saved === true) setOpen(false);
           return saved;
@@ -113,14 +134,17 @@ function FixedExpenseForm({ categories, save, initial }: { categories: Category[
   </>;
 }
 
-function FixedExpenseEditor({ categories, save, initial }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense }) {
+function FixedExpenseEditor({ categories, save, initial, variable: lockedVariable = false, monthLabel, prefill, lockedKeywords = false }: { categories: Category[]; save: FixedExpenseSave; initial?: FixedExpense; variable?: boolean; monthLabel?: string; prefill?: Prefill; lockedKeywords?: boolean }) {
   const { locale } = useLocale();
-  const [name, setName] = useState(initial?.name || "");
-  const [amount, setAmount] = useState(initial ? initial.amount.toFixed(2) : "");
-  const [category, setCategory] = useState(initial?.category || "");
-  const [notes, setNotes] = useState(initial?.notes || "");
-  const [keywords, setKeywords] = useState<string[]>(initial?.keywords || []);
+  const [name, setName] = useState(initial?.name || prefill?.name || "");
+  const [variable, setVariable] = useState(initial ? Boolean(initial.variable) : lockedVariable);
+  const [supply, setSupply] = useState(initial?.supply || "");
+  const [amount, setAmount] = useState(initial ? initial.amount.toFixed(2) : prefill ? prefill.amount.toFixed(2) : "");
+  const [category, setCategory] = useState(initial?.category || prefill?.category || "");
+  const [notes, setNotes] = useState(initial?.notes || prefill?.notes || "");
+  const [keywords, setKeywords] = useState<string[]>(initial?.keywords || prefill?.keywords || []);
   const [keyword, setKeyword] = useState("");
+  const keywordsLocked = lockedKeywords || Boolean(initial?.keywordsFromId);
   const [formError, setFormError] = useState("");
   const [conflict, setConflict] = useState<{ keyword: string; holder: string } | null>(null);
   const blacklistConflict = async () => {
@@ -146,7 +170,7 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
 
   return <form className="form" onSubmit={async (event) => {
     event.preventDefault();
-    const saved = await save(name, amount, category, keywordsToSave(), notes);
+    const saved = await save(name, amount, category, keywordsToSave(), notes, variable, variable ? supply : "");
     if (saved === true) {
       setName("");
       setAmount("");
@@ -159,10 +183,16 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
     else { setFormError(saved.error); setConflict({ keyword: saved.keyword, holder: saved.holder }); }
   }}>
     <label className="field"><span>Nome</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="Es. Affitto"/></label>
-    <label className="field"><span>Importo previsto</span><input required type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)}/></label>
+    <label className="field"><span>{variable && monthLabel ? `Importo previsto per ${monthLabel}` : "Importo previsto"}</span><input required type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)}/></label>
+    {initial && <div className="switch-row"><div><strong>Bolletta luce/gas a importo variabile</strong><small>Passa nella sezione “Bollette variabili luce e gas”: l’importo si aggiorna ogni mese.</small></div><Switch checked={variable} onCheckedChange={setVariable} aria-label="Bolletta luce/gas a importo variabile"/></div>}
+    {variable && !keywordsLocked && <label className="field"><span>Fornitura</span><select value={supply} onChange={(event) => setSupply(event.target.value)}><option value="">Nessuna (non aggiornare dalle email)</option><option value="luce">Luce</option><option value="gas">Gas</option></select><small className="field-hint">La lettura automatica delle email aggiorna questa bolletta con quelle della stessa fornitura.</small></label>}
     <label className="field"><span>Categoria (facoltativa)</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">Qualsiasi categoria</option>{categories.map((item) => <option data-no-translate value={item.name} key={item.id}>{translateDefaultCategory(item.name, locale)}</option>)}</select></label>
     <label className="field"><span>Note (facoltative)</span><textarea value={notes} maxLength={2000} rows={3} onChange={(event) => setNotes(event.target.value)} placeholder="Aggiungi dettagli utili sulla spesa fissa"/></label>
-    <fieldset className="keyword-field">
+    {keywordsLocked ? <fieldset className="keyword-field">
+      <legend>Parole chiave</legend>
+      <p>Ereditate dalla spesa originale: non si possono modificare.</p>
+      <div className="keyword-list">{keywords.map((item) => <span className="keyword-chip kw-manual" key={item}>{item}</span>)}{!keywords.length && <small>Nessuna parola chiave configurata.</small>}</div>
+    </fieldset> : <fieldset className="keyword-field">
       <legend>Parole chiave (facoltative)</legend>
       <p>Nome e parole chiave vengono cercati nella descrizione e nel dettaglio del movimento.</p>
       <div className="keyword-editor">
@@ -173,7 +203,7 @@ function FixedExpenseEditor({ categories, save, initial }: { categories: Categor
         {keywords.map((item) => <span className={`keyword-chip ${initial?.keywordSources?.[item] === "automatic" ? "kw-auto" : "kw-manual"}`} key={item}>{item}<i className="kw-origin">{initial?.keywordSources?.[item] === "automatic" ? "automatica" : "manuale"}</i><button type="button" aria-label={`Rimuovi ${item}`} onClick={() => setKeywords((current) => current.filter((value) => value !== item))}><X size={13}/></button></span>)}
         {!keywords.length && <small>Nessuna parola chiave configurata.</small>}
       </div>
-    </fieldset>
+    </fieldset>}
     {formError && <p className="error">{formError}</p>}
     {conflict && <Button type="button" variant="outline" onClick={blacklistConflict}>Metti “{conflict.keyword}” in blacklist</Button>}
     <Button>{initial ? <Pencil size={15}/> : <Plus size={15}/>} {initial ? "Salva modifiche" : "Crea spesa fissa"}</Button>

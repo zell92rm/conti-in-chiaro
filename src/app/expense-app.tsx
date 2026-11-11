@@ -25,6 +25,8 @@ import { useLocale } from "@/components/locale-provider";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { accountCycleMonth, accountPeriodBounds } from "@/lib/account-period";
 import { translateDefaultCategory } from "@/lib/i18n";
+import { appliesToMonth, expectedAmount } from "@/lib/fixed-expense-amount";
+import { parseStatement, statementAccept, statementHint, type ParsedRow } from "@/lib/statement-import";
 import {
   Dialog,
   DialogContent,
@@ -56,6 +58,7 @@ type Account = {
   name: string;
   color: string;
   type: "personale" | "risparmi" | "spese_mese";
+  bank?: string | null;
   savingsGoal: number | null;
 };
 type Tx = {
@@ -73,7 +76,7 @@ type Tx = {
   fixedExpenseId?: number | null;
 };
 type Category = { id: number; name: string; color: string; keywords?: string[] };
-type FixedExpense = { id:number; accountId:number; name:string; notes?:string|null; category:string|null; keywords:string[]; amount:number; active:boolean; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
+type FixedExpense = { id:number; accountId:number; name:string; notes?:string|null; category:string|null; keywords:string[]; amount:number; active:boolean; variable?:boolean; onlyMonth?:string|null; monthAmounts?:Record<string,number>; paidAmounts?:Record<string,number>; supply?:string|null; billAmounts?:Record<string,number>; payments:Array<{month:string;transactionId:number}>; skippedMonths:string[] };
 const eur = new Intl.NumberFormat("it-IT", {
   style: "currency",
   currency: "EUR",
@@ -181,12 +184,13 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
   const latestDashboardMonth = selectedAccount
     ? accountCycleMonth(today, selectedAccount.type)
     : today.slice(0, 7);
+  const hasMovementMonths = selectedAccount?.type === "spese_mese" || selectedAccount?.type === "risparmi";
   const availableExpenseMonths = useMemo(() => {
-    if (selectedAccount?.type !== "spese_mese") return [];
+    if (!hasMovementMonths) return [];
     return Array.from(new Set(viewTxs.map((transaction) => movementCycleMonth(transaction.date, selectedAccount))))
       .filter((availableMonth) => availableMonth <= latestDashboardMonth)
       .sort();
-  }, [viewTxs, selectedAccount, latestDashboardMonth]);
+  }, [viewTxs, selectedAccount, latestDashboardMonth, hasMovementMonths]);
   useEffect(() => {
     setMonth(latestDashboardMonth);
   }, [selectedAccount?.id, selectedAccount?.type, latestDashboardMonth]);
@@ -194,9 +198,9 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     if (month > latestDashboardMonth) setMonth(latestDashboardMonth);
   }, [month, latestDashboardMonth]);
   useEffect(() => {
-    if (selectedAccount?.type === "spese_mese" && availableExpenseMonths.length && !availableExpenseMonths.includes(month))
+    if (hasMovementMonths && availableExpenseMonths.length && !availableExpenseMonths.includes(month))
       setMonth(availableExpenseMonths.at(-1)!);
-  }, [selectedAccount, availableExpenseMonths, month]);
+  }, [hasMovementMonths, availableExpenseMonths, month]);
   const period = useMemo(() => dashboardPeriod(month, selectedAccount), [month, selectedAccount]);
   const current = useMemo(
     () => viewTxs.filter((t) => t.date >= period.start && t.date <= period.end),
@@ -244,7 +248,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
     console.groupEnd();
   }, [transactionSearch, current, visibleTransactions, accounts, selectedAccount, accountFilter, period]);
   const moveMonth = (offset: number) => {
-    if (selectedAccount?.type === "spese_mese") {
+    if (hasMovementMonths) {
       const currentIndex = availableExpenseMonths.indexOf(month);
       const target = availableExpenseMonths[currentIndex + offset];
       if (target) setMonth(target);
@@ -435,9 +439,9 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
               ))}
             </select>
             {selectedAccount ? <div className="month-navigation" aria-label="Periodo visualizzato">
-              <button type="button" onClick={() => moveMonth(-1)} disabled={selectedAccount.type === "spese_mese" && expenseMonthIndex <= 0} aria-label="Mese precedente"><ChevronLeft size={17}/></button>
-              <label><span>{monthName.format(new Date(month + "-01T12:00:00"))}</span><small>{formatPeriod(period, locale)}</small>{selectedAccount.type === "spese_mese" ? <select aria-label="Scegli periodo" value={month} onChange={(event) => setMonth(event.target.value)}>{availableExpenseMonths.map((availableMonth) => <option value={availableMonth} key={availableMonth}>{monthName.format(new Date(`${availableMonth}-01T12:00:00`))}</option>)}</select> : <input aria-label="Scegli mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>}</label>
-              <button type="button" onClick={() => moveMonth(1)} disabled={selectedAccount.type === "spese_mese" ? expenseMonthIndex < 0 || expenseMonthIndex >= availableExpenseMonths.length - 1 : month >= latestDashboardMonth} aria-label="Mese successivo"><ChevronRight size={17}/></button>
+              <button type="button" onClick={() => moveMonth(-1)} disabled={hasMovementMonths && expenseMonthIndex <= 0} aria-label="Mese precedente"><ChevronLeft size={17}/></button>
+              <label><span>{monthName.format(new Date(month + "-01T12:00:00"))}</span><small>{formatPeriod(period, locale)}</small>{hasMovementMonths ? <select aria-label="Scegli periodo" value={month} onChange={(event) => setMonth(event.target.value)}>{availableExpenseMonths.map((availableMonth) => <option value={availableMonth} key={availableMonth}>{monthName.format(new Date(`${availableMonth}-01T12:00:00`))}</option>)}</select> : <input aria-label="Scegli mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>}</label>
+              <button type="button" onClick={() => moveMonth(1)} disabled={hasMovementMonths ? expenseMonthIndex < 0 || expenseMonthIndex >= availableExpenseMonths.length - 1 : month >= latestDashboardMonth} aria-label="Mese successivo"><ChevronRight size={17}/></button>
             </div> : <input aria-label="Mese" type="month" max={latestDashboardMonth} value={month} onChange={(e) => setMonth(e.target.value > latestDashboardMonth ? latestDashboardMonth : e.target.value)}/>} 
             {selectedAccount && <a className="header-account-settings" href={`/configurazione/conti/${selectedAccount.id}`}><Settings size={16}/> Impostazioni conto</a>}
             {selectedAccount && bankLinks[selectedAccount.id] && <Button className="mobile-primary-action bank-sync-action" variant="outline" disabled={syncingBank} onClick={syncBank} title={`Sincronizza da ${bankLinks[selectedAccount.id]}`}><RefreshCw size={17}/><span>{syncingBank ? "Sincronizzazione…" : "Sincronizza con Enable Banking"}</span></Button>}
@@ -628,7 +632,7 @@ export default function ExpenseApp({ displayName }: { displayName: string }) {
                             </TableCell>
                             <TableCell data-label="Descrizione" className="transaction-description-cell">
                               <TransactionDescription description={t.description} details={t.details} compactOnMobile/>
-                              {(t.source === "import" || t.source === "enable_banking" || t.fixedExpenseId || (t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese")) && (
+                              {accountFilter !== "all" && (t.source === "import" || t.source === "enable_banking" || t.fixedExpenseId || (t.amount < 0 && accounts.find((account) => account.id === t.accountId)?.type === "spese_mese")) && (
                                 <div className="transaction-meta">
                                   {t.source === "import" && <small className="tag">Importato</small>}
                                   {t.source === "enable_banking" && <small className="tag">Enable Banking</small>}
@@ -737,7 +741,7 @@ function TxForm({
         const month = accountCycleMonth(f.date, accounts.find((account: Account) => String(account.id) === f.accountId)?.type || "personale");
         const isCurrent = String(expense.id) === String(f.fixedExpenseId);
         const paidByAnotherMovement = expense.payments.some((payment) => payment.month === month && payment.transactionId !== initial.id);
-        return expense.accountId === Number(f.accountId) && (isCurrent || (expense.active !== false && !paidByAnotherMovement && !expense.skippedMonths?.includes(month)));
+        return expense.accountId === Number(f.accountId) && (isCurrent || (expense.active !== false && appliesToMonth(expense, month) && !paidByAnotherMovement && !expense.skippedMonths?.includes(month)));
       })
     : [];
   return (
@@ -863,7 +867,7 @@ function TxForm({
         <span>Spesa fissa del mese</span>
         <select value={f.fixedExpenseId} onChange={(e) => setF({ ...f, fixedExpenseId: e.target.value })}>
           <option value="">Nessuna spesa fissa</option>
-          {fixedExpenseOptions.map((expense: FixedExpense) => <option key={expense.id} value={expense.id}>{expense.name} · {eur.format(expense.amount)}</option>)}
+          {fixedExpenseOptions.map((expense: FixedExpense) => <option key={expense.id} value={expense.id}>{expense.name} · {eur.format(expectedAmount(expense, accountCycleMonth(f.date, accounts.find((account: Account) => String(account.id) === f.accountId)?.type || "personale")))}</option>)}
         </select>
         <small>Mostra solo le spese ancora da pagare per questo conto e mese.</small>
       </label>}
@@ -900,7 +904,8 @@ function AccountTypeOverview({
   return <PersonalOverview account={account} transactions={transactions} month={month} fixedExpenses={fixedExpenses} categories={categories}/>;
 }
 
-function CategorySpendingPanel({ transactions, categories }: { transactions: Tx[]; categories: Category[] }) {
+function CategorySpendingPanel({ transactions, categories, inline = false }: { transactions: Tx[]; categories: Category[]; inline?: boolean }) {
+  if (inline) return <article className="panel category-panel"><div className="panel-title"><div><p>Dove vanno i tuoi soldi</p><h2>Movimenti per categoria</h2></div></div><CategorySpending transactions={transactions} categories={categories}/></article>;
   return <section className="analysis-grid single-analysis category-spending-section"><article className="panel"><div className="panel-title"><div><p>Dove vanno i tuoi soldi</p><h2>Movimenti per categoria</h2></div></div><CategorySpending transactions={transactions} categories={categories}/></article></section>;
 }
 
@@ -914,11 +919,13 @@ function CategorySpending({ transactions, categories }: { transactions: Tx[]; ca
     .forEach((transaction) => totals.set(transaction.category, (totals.get(transaction.category) || 0) + transaction.amount));
   const data = Array.from(totals, ([name, value]) => ({ name, value, color: knownColors.get(name) || "#7b837e" })).sort((left, right) => Math.abs(right.value) - Math.abs(left.value));
   const maxMagnitude = data.length ? Math.abs(data[0].value) : 0;
+  const total = data.reduce((sum, category) => sum + category.value, 0);
   return <>
     <div className="category-kind-toggle" role="group" aria-label="Tipo di movimenti">
       <button type="button" className={kind === "uscite" ? "active" : ""} aria-pressed={kind === "uscite"} onClick={() => setKind("uscite")}>Uscite</button>
       <button type="button" className={kind === "entrate" ? "active" : ""} aria-pressed={kind === "entrate"} onClick={() => setKind("entrate")}>Entrate</button>
     </div>
+    {data.length > 0 && <div className="category-total"><span>{kind === "uscite" ? "Totale uscite" : "Totale entrate"}</span><b>{eur.format(total)}</b></div>}
     {!data.length
       ? <p className="muted">{kind === "uscite" ? "Nessuna uscita nel periodo selezionato." : "Nessuna entrata nel periodo selezionato."}</p>
       : <div className="category-spending-scroll" tabIndex={0} aria-label="Movimenti per categoria, scorri verticalmente per vederli tutti">{data.map((category) => <div className="category category-spending-card" key={category.name}><span data-no-translate><i style={{ background: category.color }}/>{translateDefaultCategory(category.name, locale)}</span><b>{eur.format(category.value)}</b><div><em style={{ width: `${maxMagnitude ? (Math.abs(category.value) / maxMagnitude) * 100 : 0}%`, background: category.color }}/></div></div>)}</div>}
@@ -996,8 +1003,7 @@ function PersonalOverview({ account, transactions, month, fixedExpenses, categor
       <article className="metric"><span>{savingLabel}</span><strong className={savingDelta >= 0 ? "positive" : "negative"}>{eur.format(savingDelta)}</strong><small>{isCurrentPeriod ? (locale === "en" ? `Forecast change after deducting ${eur.format(reserved)} still due` : `Delta previsto, al netto di ${eur.format(reserved)} ancora da pagare`) : (locale === "en" ? "Change from the previous month's balance" : "Delta rispetto al saldo del mese precedente")}</small></article>
       <article className="metric"><span>Media risparmio mensile</span><strong>{eur.format(months.slice(1).reduce((sum, item, index) => sum + item.balance - months[index].balance, 0) / Math.max(1, months.length - 1))}</strong><small>Ultimi sei intervalli mensili</small></article>
     </section>
-    <section className="analysis-grid single-analysis"><article className="panel"><div className="panel-title"><div><p>Saldo residuo</p><h2>Andamento e risparmio mensile</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:6,left:0,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>compactEur.format(value)} tickLine={false} axisLine={false} width={66}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:4,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article></section>
-    <CategorySpendingPanel transactions={transactions.filter((transaction) => transaction.date >= selectedPeriod.start && transaction.date <= selectedPeriod.end)} categories={categories}/>
+    <section className="personal-analysis-row"><article className="panel balance-panel"><div className="panel-title"><div><p>Saldo residuo</p><h2>Andamento e risparmio mensile</h2></div></div><div className="balance-line-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={months} margin={{top:12,right:6,left:0,bottom:4}}><CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#ded8cb"/><XAxis dataKey="label" tickLine={false} axisLine={false}/><YAxis tickFormatter={(value:number)=>compactEur.format(value)} tickLine={false} axisLine={false} width={66}/><Tooltip formatter={(value)=>eur.format(Number(value))} labelFormatter={(label)=>`Fine ${label}`}/><Line type="monotone" dataKey="balance" name="Saldo" stroke="#173f35" strokeWidth={3} dot={{r:4,fill:"#f7f4ec",strokeWidth:3}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div><div className="monthly-deltas">{months.slice(1).map((item,index)=>{const delta=item.balance-months[index].balance;return <span key={item.key}><small>{item.label}</small><strong className={delta>=0?"positive":"negative"}>{delta>=0?"+":""}{eur.format(delta)}</strong></span>})}</div></article><CategorySpendingPanel inline transactions={transactions.filter((transaction) => transaction.date >= selectedPeriod.start && transaction.date <= selectedPeriod.end)} categories={categories}/></section>
   </>;
 }
 
@@ -1092,17 +1098,17 @@ function calculateWeeks(transactions: Tx[], month: string, reserved = 0) {
   return { opening, income, closing: opening + income - spent, pool, spent: variableSpent, totalSpent: spent, totalCount: allExpenses.length, count: expenses.length, transactionCount: rows.length, remaining: pool - variableSpent, weeks };
 }
 function unpaidFixedTotal(expenses: FixedExpense[], accountId: number, month: string) {
-  return expenses.filter((expense) => expense.active !== false && expense.accountId === accountId && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month)).reduce((sum, expense) => sum + expense.amount, 0);
+  return expenses.filter((expense) => expense.active !== false && expense.accountId === accountId && appliesToMonth(expense, month) && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month)).reduce((sum, expense) => sum + expectedAmount(expense, month), 0);
 }
 function matchingFixedExpense(expenses: FixedExpense[], accountId: number, accountType: string, date: string, description: string, amount: number, excludedIds = new Set<number>()) {
   if (!(amount < 0) || !accountId || !date) return undefined;
   const month = accountCycleMonth(date, accountType);
   return expenses
-    .filter((expense) => expense.active !== false && expense.accountId === accountId && !excludedIds.has(expense.id) && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month) && fixedExpenseMatches(expense.name, expense.amount, description, amount, expense.keywords))
-    .sort((a, b) => fixedExpenseSimilarity(a, amount, description) - fixedExpenseSimilarity(b, amount, description))[0];
+    .filter((expense) => expense.active !== false && expense.accountId === accountId && !excludedIds.has(expense.id) && appliesToMonth(expense, month) && !expense.payments.some((payment) => payment.month === month) && !expense.skippedMonths?.includes(month) && fixedExpenseMatches(expense.name, expectedAmount(expense, month), description, amount, expense.keywords))
+    .sort((a, b) => fixedExpenseSimilarity(a, month, amount, description) - fixedExpenseSimilarity(b, month, amount, description))[0];
 }
-function fixedExpenseSimilarity(expense: FixedExpense, amount: number, description: string) {
-  const difference = Math.abs(expense.amount - Math.abs(amount));
+function fixedExpenseSimilarity(expense: FixedExpense, month: string, amount: number, description: string) {
+  const difference = Math.abs(expectedAmount(expense, month) - Math.abs(amount));
   const exactAmount = difference < 0.005;
   const compatibleText = hasFixedDescriptionMatch(expense.name, description, expense.keywords);
   if (exactAmount && compatibleText) return 0;
@@ -1222,13 +1228,11 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
     (previewFilter === "new" && !row.duplicate && !row.potentialDuplicate && !row.updateMatch) ||
     (previewFilter === "updates" && row.updateMatch),
   );
+  const selectedBank = accounts.find((account: Account) => String(account.id) === accountId)?.bank;
   const read = async (file: File) => {
     try {
-      const isXlsx = file.name.toLowerCase().endsWith(".xlsx");
-      const parsed = !isXlsx
-        ? parseDelimited(await file.text())
-        : await parseXlsx(file);
-      const result = normalizeImport(parsed, localCategories, history, isXlsx ? "xlsx" : "csv");
+      const parsed = await parseStatement(file, selectedBank);
+      const result = normalizeImport(parsed, localCategories, history);
       setRows(result.rows);
       setPreviewFilter("all");
       setError("");
@@ -1266,10 +1270,10 @@ function ImportForm({ accounts, defaultAccountId = "", categories, fixedExpenses
         {source !== "enable_banking" && <label className="drop">
           <Upload />
           <b>Scegli l’estratto conto</b>
-          <span>CSV o XLSX, prima riga con intestazioni</span>
+          <span>{statementHint(selectedBank)}</span>
           <input
             type="file"
-            accept=".csv,.xlsx"
+            accept={statementAccept(selectedBank)}
             onChange={(e) => e.target.files?.[0] && read(e.target.files[0])}
           />
         </label>}
@@ -1443,37 +1447,6 @@ function incomeCategoryForAccount(accountId: string | number, accounts: Account[
     : "Ricarica";
 }
 
-function parseDelimited(text: string) {
-  const clean = text.replace(/^\uFEFF/, "");
-  const firstLine = clean.split(/\r?\n/, 1)[0];
-  const sep = (firstLine.match(/;/g) || []).length > (firstLine.match(/,/g) || []).length ? ";" : ",";
-  const rows: string[][] = [];
-  let row: string[] = [], value = "", quoted = false;
-  for (let i = 0; i < clean.length; i++) {
-    const char = clean[i];
-    if (char === '"') {
-      if (quoted && clean[i + 1] === '"') { value += '"'; i++; }
-      else quoted = !quoted;
-    } else if (char === sep && !quoted) { row.push(value.trim()); value = ""; }
-    else if ((char === "\n" || char === "\r") && !quoted) {
-      if (char === "\r" && clean[i + 1] === "\n") i++;
-      row.push(value.trim());
-      if (row.some(Boolean)) rows.push(row);
-      row = []; value = "";
-    } else value += char;
-  }
-  row.push(value.trim());
-  if (row.some(Boolean)) rows.push(row);
-  return rows;
-}
-function money(raw: string) {
-  const s = String(raw || "").trim();
-  if (!s) return NaN;
-  const normalized = s.includes(",")
-    ? s.replace(/\./g, "").replace(",", ".")
-    : s.replace(/,(?=\d{3}\b)/g, "");
-  return Number(normalized.replace(/[^0-9.-]/g, ""));
-}
 function autoCategory(text: string, amount: number, categories: Category[]) {
   const t = text.toLowerCase();
   const keywordMatch = keywordCategory(text, categories);
@@ -1601,63 +1574,11 @@ function refundCategory(description: string, amount: number, history: Array<{ de
   ) ? "Rimborso" : "";
 }
 function normalizeImport(
-  data: string[][],
+  parsedRows: ParsedRow[],
   categories: Category[],
   history: Tx[] = [],
-  fileType: "csv" | "xlsx" = "csv",
 ) {
-  if (data.length < 2) throw new Error("Il file non contiene movimenti");
-  const normalizeHeader = (value: unknown) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
-  const headerIndex = data.findIndex((row) => {
-    const headers = row.map(normalizeHeader);
-    const hasDate = headers.some((header) => header === "data" || header === "date" || header.startsWith("data "));
-    const hasDescription = headers.some((header) => ["descrizione", "description", "operazione"].includes(header));
-    const hasAmount = headers.some((header) => ["importo", "amount", "valore", "uscite", "addebiti", "entrate", "accrediti"].some((name) => header.includes(name)));
-    return hasDate && hasDescription && hasAmount;
-  });
-  if (headerIndex < 0) throw new Error("Non è stata trovata una riga di intestazione valida");
-  const h = data[headerIndex].map(normalizeHeader);
-  const find = (words: string[]) =>
-    h.findIndex((x) => words.some((w) => x.includes(w)));
-  const di = find(["data", "date"]),
-    xi = fileType === "xlsx"
-      ? ["operazione", "descrizione", "description"]
-        .map((name) => h.findIndex((header) => header === name))
-        .find((index) => index >= 0) ?? -1
-      : ["descrizione", "description", "operazione"]
-        .map((name) => h.findIndex((header) => header === name))
-        .find((index) => index >= 0) ?? -1,
-    detailsIndex = ["dettagli", "details"]
-      .map((name) => h.findIndex((header) => header === name))
-      .find((index) => index >= 0) ?? -1,
-    ai = find(["importo", "amount", "valore"]),
-    ui = find(["uscite", "addebiti"]),
-    ei = find(["entrate", "accrediti"]);
-  if (di < 0 || xi < 0 || (ai < 0 && ui < 0 && ei < 0))
-    throw new Error(
-      fileType === "xlsx"
-        ? "Servono le colonne Data, Operazione e Importo"
-        : "Servono colonne Data, Descrizione e Importo (oppure Entrate/Uscite)",
-    );
-  const parsedRows = data
-    .slice(headerIndex + 1)
-    .map((r) => {
-      const raw = ai >= 0 ? r[ai] : r[ei] || "" || `-${r[ui] || ""}`,
-        n = money(raw),
-        date = normalizeImportDate(r[di]);
-      const description = String(r[xi] || "Movimento").trim();
-      const details = detailsIndex >= 0 ? String(r[detailsIndex] || "").trim() || undefined : undefined;
-      return {
-        date,
-        description,
-        details,
-        amount: n,
-      };
-    })
-    .filter(
-      (r) =>
-        r.date && r.description && Number.isFinite(r.amount) && r.amount !== 0,
-    );
+  if (!parsedRows.length) throw new Error("Il file non contiene movimenti");
   const refundHistory = [...history, ...parsedRows];
   const rows = parsedRows.map((row) => ({
     ...row,
@@ -1668,89 +1589,4 @@ function normalizeImport(
       autoCategory(transactionText(row), row.amount, categories),
   }));
   return { rows };
-}
-function normalizeImportDate(raw: unknown) {
-  const value = String(raw ?? "").trim();
-  if (!value) return "";
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
-  if (/^\d+(?:\.\d+)?$/.test(value)) {
-    const serial = Number(value);
-    if (serial > 0 && serial < 100000) {
-      const timestamp = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000;
-      return new Date(timestamp).toISOString().slice(0, 10);
-    }
-  }
-  const match = value.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4}|\d{2})(?:\D|$)/);
-  if (!match) return "";
-  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
-  return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
-}
-async function parseXlsx(file: File) {
-  const b = new Uint8Array(await file.arrayBuffer()),
-    files: Record<string, Uint8Array> = {};
-  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  let endOfCentralDirectory = -1;
-  for (let offset = b.length - 22; offset >= Math.max(0, b.length - 65557); offset--) {
-    if (view.getUint32(offset, true) === 0x06054b50) {
-      endOfCentralDirectory = offset;
-      break;
-    }
-  }
-  if (endOfCentralDirectory < 0) throw new Error("Il file Excel non contiene un archivio ZIP valido");
-  const entryCount = view.getUint16(endOfCentralDirectory + 10, true);
-  let centralOffset = view.getUint32(endOfCentralDirectory + 16, true);
-  for (let entryIndex = 0; entryIndex < entryCount; entryIndex++) {
-    if (view.getUint32(centralOffset, true) !== 0x02014b50) throw new Error("Indice ZIP Excel non valido");
-    const method = view.getUint16(centralOffset + 10, true),
-      compressedSize = view.getUint32(centralOffset + 20, true),
-      nameLength = view.getUint16(centralOffset + 28, true),
-      extraLength = view.getUint16(centralOffset + 30, true),
-      commentLength = view.getUint16(centralOffset + 32, true),
-      localOffset = view.getUint32(centralOffset + 42, true),
-      name = new TextDecoder().decode(b.slice(centralOffset + 46, centralOffset + 46 + nameLength));
-    if (view.getUint32(localOffset, true) !== 0x04034b50) throw new Error("Contenuto ZIP Excel non valido");
-    const localNameLength = view.getUint16(localOffset + 26, true),
-      localExtraLength = view.getUint16(localOffset + 28, true),
-      dataOffset = localOffset + 30 + localNameLength + localExtraLength,
-      raw = b.slice(dataOffset, dataOffset + compressedSize);
-    if (method === 0) files[name] = raw;
-    else if (method === 8) {
-      const ds = new DecompressionStream("deflate-raw" as CompressionFormat);
-      files[name] = new Uint8Array(
-        await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer(),
-      );
-    }
-    centralOffset += 46 + nameLength + extraLength + commentLength;
-  }
-  const dec = (n: string) =>
-    files[n] ? new TextDecoder().decode(files[n]) : "";
-  const shared = [
-    ...dec("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g),
-  ].map((m) =>
-    [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)]
-      .map((x) => xml(x[1]))
-      .join(""),
-  );
-  const sheet = dec("xl/worksheets/sheet1.xml");
-  if (!sheet) throw new Error("Il primo foglio Excel non è leggibile");
-  return [...sheet.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)].map((row) => {
-    const out: string[] = [];
-    for (const c of row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
-      const reference = c[1].match(/\br="([A-Z]+)\d+"/),
-        type = c[1].match(/\bt="([^"]+)"/)?.[1];
-      if (!reference) continue;
-      const idx = reference[1].split("").reduce((s, x) => s * 26 + x.charCodeAt(0) - 64, 0) - 1,
-        v = (c[2].match(/<v>([\s\S]*?)<\/v>/) || c[2].match(/<t[^>]*>([\s\S]*?)<\/t>/))?.[1] || "";
-      out[idx] = type === "s" ? shared[Number(v)] || "" : xml(v);
-    }
-    return out;
-  });
-}
-function xml(s: string) {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }

@@ -2,6 +2,10 @@ import { and, desc, eq, gte, inArray, lt, lte, notInArray } from "drizzle-orm";
 import { getCurrentUser } from "../../auth";
 import { ensureUserSettingsSchema, getDb } from "../../../db";
 import { accountCycleMonth, accountPeriodBounds } from "../../../lib/account-period";
+import { getBank } from "../../../lib/banks";
+import { appliesToMonth, expectedAmount, isMonthKey } from "../../../lib/fixed-expense-amount";
+import { billMonthAmounts } from "../../../lib/energy-bill-amounts";
+import { isSupply } from "../../../lib/energy-providers";
 import {
   accounts,
   accountGoals,
@@ -12,6 +16,9 @@ import {
   fixedExpenseKeywordSources,
   fixedExpensePayments,
   fixedExpenseSkips,
+  fixedExpenseMonthAmounts,
+  energyBills,
+  energyMailConfigs,
   fixedExpenses,
   keywordBlacklists,
   transactions,
@@ -184,7 +191,7 @@ async function learnAssociationKeywords(ownerEmail: string, transaction: { descr
   }
   if (fixedExpenseId && Number.isInteger(fixedExpenseId)) {
     const [expense] = await db.select().from(fixedExpenses).where(and(eq(fixedExpenses.ownerEmail, ownerEmail), eq(fixedExpenses.id, fixedExpenseId))).limit(1);
-    if (expense) {
+    if (expense && !expense.keywordsFromId) {
       const allExpenses = await db.select().from(fixedExpenses).where(eq(fixedExpenses.ownerEmail, ownerEmail));
       const knownSources = await db.select().from(fixedExpenseKeywordSources).where(eq(fixedExpenseKeywordSources.ownerEmail, ownerEmail));
       const missingSources = allExpenses.flatMap((item) => parseFixedExpenseKeywords(item.keywords)
@@ -291,6 +298,31 @@ async function validateManualKeywords(ownerEmail: string, scope: KeywordScope, e
     }
   }
   return { keywords };
+}
+
+async function inheritedKeywords(owner: string, expense: typeof fixedExpenses.$inferSelect) {
+  if (!expense.keywordsFromId) return parseFixedExpenseKeywords(expense.keywords);
+  const [parent] = await getDb().select().from(fixedExpenses).where(and(eq(fixedExpenses.id, expense.keywordsFromId), eq(fixedExpenses.ownerEmail, owner))).limit(1);
+  return parent ? parseFixedExpenseKeywords(parent.keywords) : [];
+}
+
+async function loadExpectedAmount(owner: string, expense: typeof fixedExpenses.$inferSelect, month: string) {
+  if (!expense.variable) return expense.amount;
+  const db = getDb();
+  const saved = await db.select().from(fixedExpenseMonthAmounts).where(and(eq(fixedExpenseMonthAmounts.ownerEmail, owner), eq(fixedExpenseMonthAmounts.fixedExpenseId, expense.id)));
+  const payments = await db.select().from(fixedExpensePayments).where(and(eq(fixedExpensePayments.ownerEmail, owner), eq(fixedExpensePayments.fixedExpenseId, expense.id)));
+  const paidAmounts: Record<string, number> = {};
+  for (const payment of payments) {
+    const [paid] = await db.select({ amount: transactions.amount }).from(transactions).where(and(eq(transactions.id, payment.transactionId), eq(transactions.ownerEmail, owner))).limit(1);
+    if (paid) paidAmounts[payment.month] = Math.abs(paid.amount);
+  }
+  let billAmounts: Record<string, number> = {};
+  if (expense.supply && !expense.onlyMonth && !expense.keywordsFromId) {
+    const [account] = await db.select({ type: accounts.type }).from(accounts).where(and(eq(accounts.id, expense.accountId), eq(accounts.ownerEmail, owner))).limit(1);
+    const bills = await db.select().from(energyBills).where(and(eq(energyBills.ownerEmail, owner), eq(energyBills.accountId, expense.accountId), eq(energyBills.supply, expense.supply)));
+    if (account) billAmounts = billMonthAmounts(bills, (date) => accountCycleMonth(date, account.type));
+  }
+  return expectedAmount({ amount: expense.amount, variable: true, monthAmounts: Object.fromEntries(saved.map((row) => [row.month, row.amount])), paidAmounts, billAmounts }, month);
 }
 
 export async function GET() {
@@ -432,6 +464,8 @@ export async function GET() {
     db.select().from(fixedExpensePayments).where(eq(fixedExpensePayments.ownerEmail, user.email)),
     db.select().from(fixedExpenseSkips).where(eq(fixedExpenseSkips.ownerEmail, user.email)),
   ]);
+  const monthAmountRows = await db.select().from(fixedExpenseMonthAmounts).where(eq(fixedExpenseMonthAmounts.ownerEmail, user.email));
+  const energyBillRows = await db.select().from(energyBills).where(eq(energyBills.ownerEmail, user.email));
   const duplicateFixedKeywords = Array.from(new Set(recurring.flatMap((expense) => parseFixedExpenseKeywords(expense.keywords)
     .filter((keyword) => recurring.some((other) => other.id !== expense.id && parseFixedExpenseKeywords(other.keywords).includes(keyword))))));
   const blockedFixedKeywords = Array.from(new Set(recurring.flatMap((expense) => parseFixedExpenseKeywords(expense.keywords).filter((keyword) => associationLocationWords.includes(keyword)))));
@@ -482,13 +516,21 @@ export async function GET() {
       keywords: keywordRows.filter((row) => row.categoryId === category.id).map((row) => row.keyword),
       keywordSources: Object.fromEntries(keywordRows.filter((row) => row.categoryId === category.id).map((row) => [row.keyword, row.source === "automatic" ? "automatic" : "manual"])),
     })),
-    fixedExpenses: recurring.map((expense) => ({
-      ...expense,
+    fixedExpenses: recurring.map((own) => {
+      const expense = own.keywordsFromId ? (recurring.find((item) => item.id === own.keywordsFromId) ?? own) : own;
+      return {
+      ...own,
       keywords: parseFixedExpenseKeywords(expense.keywords).filter((keyword) => !duplicateFixedKeywords.includes(keyword) && !blockedFixedKeywords.includes(keyword)),
       keywordSources: Object.fromEntries(parseFixedExpenseKeywords(expense.keywords).map((keyword) => [keyword, fixedSourceRows.find((source) => source.fixedExpenseId === expense.id && source.keyword === keyword)?.source === "automatic" ? "automatic" : "manual"])),
-      payments: normalizedRecurringPayments.filter((payment) => payment.fixedExpenseId === expense.id),
-      skippedMonths: normalizedRecurringSkips.filter((skip) => skip.fixedExpenseId === expense.id).map((skip) => skip.month),
-    })),
+      payments: normalizedRecurringPayments.filter((payment) => payment.fixedExpenseId === own.id),
+      skippedMonths: normalizedRecurringSkips.filter((skip) => skip.fixedExpenseId === own.id).map((skip) => skip.month),
+      billAmounts: own.supply && own.variable && !own.onlyMonth && !own.keywordsFromId
+        ? billMonthAmounts(energyBillRows.filter((bill) => bill.accountId === own.accountId && bill.supply === own.supply), (date) => accountCycleMonth(date, a.find((account) => account.id === own.accountId)?.type || "personale"))
+        : {},
+      monthAmounts: Object.fromEntries(monthAmountRows.filter((row) => row.fixedExpenseId === own.id).map((row) => [row.month, row.amount])),
+      paidAmounts: Object.fromEntries(normalizedRecurringPayments.filter((payment) => payment.fixedExpenseId === own.id).flatMap((payment) => { const paid = t.find((transaction) => transaction.id === payment.transactionId); return paid ? [[payment.month, Math.abs(paid.amount)]] : []; })),
+      };
+    }),
     homeAccountId,
     keywordBlacklists: {
       categories: blacklistRows.filter((row) => row.scope === "category").map((row) => row.keyword),
@@ -567,8 +609,22 @@ export async function POST(request: Request) {
     )).limit(1);
     if (!account || !["personale", "spese_mese"].includes(account.type) || !String(body.name || "").trim() || !Number.isFinite(amount) || amount <= 0)
       return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
-    const validation = await validateManualKeywords(user.email, "fixed_expense", null, body.keywords);
-    if (validation.error) return keywordConflictResponse(validation, "fixed_expense");
+    const variable = body.variable === true;
+    const onlyMonth = isMonthKey(body.onlyMonth) ? body.onlyMonth : null;
+    if (body.onlyMonth && !onlyMonth) return Response.json({ error: "Mese non valido" }, { status: 400 });
+    // Una bolletta extra eredita le parole chiave della spesa originale: nessuna modifica e nessun controllo di conflitto.
+    let keywordsFromId: number | null = null;
+    let inheritedSupply: string | null = null;
+    let inherited: string[] = [];
+    if (body.keywordsFromId !== undefined && body.keywordsFromId !== null) {
+      const [parent] = await db.select().from(fixedExpenses).where(and(eq(fixedExpenses.id, Number(body.keywordsFromId)), eq(fixedExpenses.ownerEmail, user.email))).limit(1);
+      if (!parent || parent.keywordsFromId || !onlyMonth) return Response.json({ error: "Bolletta extra non valida" }, { status: 400 });
+      keywordsFromId = parent.id;
+      inheritedSupply = parent.supply;
+      inherited = parseFixedExpenseKeywords(parent.keywords);
+    }
+    const validation = keywordsFromId ? { keywords: [] as string[], error: undefined } : await validateManualKeywords(user.email, "fixed_expense", null, body.keywords);
+    if (validation.error) return keywordConflictResponse(validation as Awaited<ReturnType<typeof validateManualKeywords>>, "fixed_expense");
     const [row] = await db.insert(fixedExpenses).values({
       ownerEmail: user.email,
       accountId,
@@ -577,27 +633,43 @@ export async function POST(request: Request) {
       category: String(body.category || "").trim() || null,
       keywords: JSON.stringify(validation.keywords),
       amount,
+      variable,
+      onlyMonth,
+      keywordsFromId,
+      supply: keywordsFromId ? inheritedSupply : (isSupply(body.supply) ? body.supply : null),
       createdAt: now(),
     }).returning();
+    const currentCycleMonth = accountCycleMonth(new Date().toISOString().slice(0, 10), account.type);
+    const amountMonth = onlyMonth || (isMonthKey(body.month) ? body.month : currentCycleMonth);
+    if (variable) await db.insert(fixedExpenseMonthAmounts).values({ ownerEmail: user.email, fixedExpenseId: row.id, month: amountMonth, amount, createdAt: now() }).onConflictDoNothing();
     if (validation.keywords.length) await db.insert(fixedExpenseKeywordSources).values(validation.keywords.map((keyword) => ({ ownerEmail: user.email, fixedExpenseId: row.id, keyword, source: "manual" }))).onConflictDoNothing();
-    const month = accountCycleMonth(new Date().toISOString().slice(0, 10), account.type);
+    const month = onlyMonth || accountCycleMonth(new Date().toISOString().slice(0, 10), account.type);
     const period = accountPeriodBounds(month, account.type);
     const alreadyLinked = new Set((await db.select({ transactionId: fixedExpensePayments.transactionId }).from(fixedExpensePayments).where(eq(fixedExpensePayments.ownerEmail, user.email))).map((payment) => payment.transactionId));
     const possibleTransactions = (await db.select().from(transactions).where(and(
       eq(transactions.ownerEmail, user.email), eq(transactions.accountId, accountId), gte(transactions.date, period.start), lte(transactions.date, period.end),
-    ))).filter((transaction) => transaction.amount < 0 && !alreadyLinked.has(transaction.id) && fixedExpenseMatches(row.name, parseFixedExpenseKeywords(row.keywords), amount, [transaction.description, transaction.details].filter(Boolean).join(" "), transaction.amount))
-      .sort((left, right) => fixedMatchScore(row.name, parseFixedExpenseKeywords(row.keywords), amount, [left.description, left.details].filter(Boolean).join(" "), left.amount) - fixedMatchScore(row.name, parseFixedExpenseKeywords(row.keywords), amount, [right.description, right.details].filter(Boolean).join(" "), right.amount));
-    return Response.json({ row: { ...row, keywords: parseFixedExpenseKeywords(row.keywords), payments: [] }, possibleTransactions });
+    ))).filter((transaction) => transaction.amount < 0 && !alreadyLinked.has(transaction.id) && fixedExpenseMatches(row.name, keywordsFromId ? inherited : parseFixedExpenseKeywords(row.keywords), amount, [transaction.description, transaction.details].filter(Boolean).join(" "), transaction.amount))
+      .sort((left, right) => fixedMatchScore(row.name, keywordsFromId ? inherited : parseFixedExpenseKeywords(row.keywords), amount, [left.description, left.details].filter(Boolean).join(" "), left.amount) - fixedMatchScore(row.name, keywordsFromId ? inherited : parseFixedExpenseKeywords(row.keywords), amount, [right.description, right.details].filter(Boolean).join(" "), right.amount));
+    return Response.json({ row: { ...row, keywords: keywordsFromId ? inherited : parseFixedExpenseKeywords(row.keywords), payments: [], skippedMonths: [], monthAmounts: variable ? { [amountMonth]: amount } : {}, paidAmounts: {} }, possibleTransactions });
   }
   if (body.action === "fixed-expense-update") {
     const id = Number(body.id), amount = Math.abs(Number(body.amount)), name = String(body.name || "").trim();
     if (!name || !Number.isFinite(amount) || amount <= 0) return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
-    const validation = await validateManualKeywords(user.email, "fixed_expense", id, body.keywords);
-    if (validation.error) return keywordConflictResponse(validation, "fixed_expense");
+    const [existing] = await db.select().from(fixedExpenses).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email))).limit(1);
+    if (!existing) return Response.json({ error: "Spesa fissa non valida" }, { status: 400 });
+    const inheritsKeywords = Boolean(existing.keywordsFromId);
+    const validation = inheritsKeywords ? { keywords: [] as string[], error: undefined } : await validateManualKeywords(user.email, "fixed_expense", id, body.keywords);
+    if (validation.error) return keywordConflictResponse(validation as Awaited<ReturnType<typeof validateManualKeywords>>, "fixed_expense");
     const category = String(body.category || "").trim() || null, notes = String(body.notes || "").trim().slice(0, 2000) || null, keywords = JSON.stringify(validation.keywords);
-    await db.update(fixedExpenses).set({ name, notes, amount, category, keywords }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
-    await db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.fixedExpenseId, id)));
-    if (validation.keywords.length) await db.insert(fixedExpenseKeywordSources).values(validation.keywords.map((keyword) => ({ ownerEmail: user.email, fixedExpenseId: id, keyword, source: "manual" }))).onConflictDoNothing();
+    const variable = typeof body.variable === "boolean" ? body.variable : existing.variable;
+    const updateMonth = existing.onlyMonth || (isMonthKey(body.month) ? body.month : null);
+    if (variable && !updateMonth) return Response.json({ error: "Mese non valido" }, { status: 400 });
+    // Per le bollette variabili l'importo vale per il mese indicato; l'importo di base non cambia.
+    await db.update(fixedExpenses).set(inheritsKeywords ? (variable ? { name, notes, category, variable } : { name, notes, amount, category, variable }) : variable ? { name, notes, category, keywords, variable } : { name, notes, amount, category, keywords, variable }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
+    if (body.supply !== undefined) await db.update(fixedExpenses).set({ supply: isSupply(body.supply) ? body.supply : null }).where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.ownerEmail, user.email)));
+    if (variable && updateMonth) await db.insert(fixedExpenseMonthAmounts).values({ ownerEmail: user.email, fixedExpenseId: id, month: updateMonth, amount, createdAt: now() }).onConflictDoUpdate({ target: [fixedExpenseMonthAmounts.fixedExpenseId, fixedExpenseMonthAmounts.month], set: { amount } });
+    if (!inheritsKeywords) await db.delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.fixedExpenseId, id)));
+    if (!inheritsKeywords && validation.keywords.length) await db.insert(fixedExpenseKeywordSources).values(validation.keywords.map((keyword) => ({ ownerEmail: user.email, fixedExpenseId: id, keyword, source: "manual" }))).onConflictDoNothing();
     return Response.json({ ok: true });
   }
   if (body.action === "fixed-expense-move") {
@@ -626,6 +698,8 @@ export async function POST(request: Request) {
   }
   if (body.action === "fixed-expense-skip") {
     const fixedExpenseId = Number(body.id), month = String(body.month || new Date().toISOString().slice(0, 7));
+    const [skipTarget] = await db.select({ onlyMonth: fixedExpenses.onlyMonth }).from(fixedExpenses).where(and(eq(fixedExpenses.id, fixedExpenseId), eq(fixedExpenses.ownerEmail, user.email))).limit(1);
+    if (!skipTarget || !appliesToMonth(skipTarget, month)) return Response.json({ error: "Questa spesa non è prevista per il mese selezionato" }, { status: 400 });
     const where = and(eq(fixedExpenseSkips.ownerEmail, user.email), eq(fixedExpenseSkips.fixedExpenseId, fixedExpenseId), eq(fixedExpenseSkips.month, month));
     const existing = await db.select({ id: fixedExpenseSkips.id }).from(fixedExpenseSkips).where(where).limit(1);
     if (existing.length) await db.delete(fixedExpenseSkips).where(where);
@@ -638,6 +712,9 @@ export async function POST(request: Request) {
       eq(fixedExpenses.id, fixedExpenseId), eq(fixedExpenses.ownerEmail, user.email),
     )).limit(1);
     if (!expense || expense.active === false) return Response.json({ error: "Spesa fissa non valida o disabilitata" }, { status: 400 });
+    if (!appliesToMonth(expense, month)) return Response.json({ error: "Questa spesa non è prevista per il mese selezionato" }, { status: 400 });
+    const searchAmount = await loadExpectedAmount(user.email, expense, month);
+    const searchKeywords = await inheritedKeywords(user.email, expense);
     const [expenseAccount] = await db.select().from(accounts).where(and(eq(accounts.id, expense.accountId), eq(accounts.ownerEmail, user.email))).limit(1);
     if (!expenseAccount) return Response.json({ error: "Conto non valido" }, { status: 400 });
     const period = accountPeriodBounds(month, expenseAccount.type);
@@ -650,8 +727,8 @@ export async function POST(request: Request) {
     )).map((payment) => payment.transactionId));
     const matches = (await db.select().from(transactions).where(and(
       eq(transactions.ownerEmail, user.email), eq(transactions.accountId, expense.accountId), gte(transactions.date, period.start), lte(transactions.date, period.end),
-    ))).filter((transaction) => transaction.amount < 0 && !alreadyLinked.has(transaction.id) && fixedExpenseMatches(expense.name, parseFixedExpenseKeywords(expense.keywords), expense.amount, [transaction.description, transaction.details].filter(Boolean).join(" "), transaction.amount))
-      .sort((left, right) => fixedMatchScore(expense.name, parseFixedExpenseKeywords(expense.keywords), expense.amount, [left.description, left.details].filter(Boolean).join(" "), left.amount) - fixedMatchScore(expense.name, parseFixedExpenseKeywords(expense.keywords), expense.amount, [right.description, right.details].filter(Boolean).join(" "), right.amount))
+    ))).filter((transaction) => transaction.amount < 0 && !alreadyLinked.has(transaction.id) && fixedExpenseMatches(expense.name, searchKeywords, searchAmount, [transaction.description, transaction.details].filter(Boolean).join(" "), transaction.amount))
+      .sort((left, right) => fixedMatchScore(expense.name, searchKeywords, searchAmount, [left.description, left.details].filter(Boolean).join(" "), left.amount) - fixedMatchScore(expense.name, searchKeywords, searchAmount, [right.description, right.details].filter(Boolean).join(" "), right.amount))
       .slice(0, 10);
     return Response.json({ matches });
   }
@@ -682,6 +759,7 @@ export async function POST(request: Request) {
         name: String(body.name).trim(),
         color: body.color || "#173f35",
         type: body.type || "personale",
+        bank: getBank(body.bank)?.id ?? null,
         createdAt: now(),
       })
       .returning();
@@ -689,11 +767,22 @@ export async function POST(request: Request) {
   }
   if (body.action === "account-update") {
     const allowed = ["personale", "risparmi", "spese_mese"];
-    if (!allowed.includes(body.type))
-      return Response.json({ error: "Tipologia non valida" }, { status: 400 });
+    const changes: { type?: string; bank?: string | null } = {};
+    if (body.type !== undefined) {
+      if (!allowed.includes(body.type))
+        return Response.json({ error: "Tipologia non valida" }, { status: 400 });
+      changes.type = body.type;
+    }
+    if (body.bank !== undefined) {
+      if (body.bank !== null && body.bank !== "" && !getBank(body.bank))
+        return Response.json({ error: "Banca non valida" }, { status: 400 });
+      changes.bank = getBank(body.bank)?.id ?? null;
+    }
+    if (!Object.keys(changes).length)
+      return Response.json({ error: "Nessuna modifica" }, { status: 400 });
     await db
       .update(accounts)
-      .set({ type: body.type })
+      .set(changes)
       .where(
         and(
           eq(accounts.id, Number(body.id)),
@@ -1100,6 +1189,9 @@ export async function POST(request: Request) {
   }
   if (body.action === "delete-all") {
     await db.delete(fixedExpenseSkips).where(eq(fixedExpenseSkips.ownerEmail, user.email));
+    await db.delete(fixedExpenseMonthAmounts).where(eq(fixedExpenseMonthAmounts.ownerEmail, user.email));
+    await db.delete(energyBills).where(eq(energyBills.ownerEmail, user.email));
+    await db.delete(energyMailConfigs).where(eq(energyMailConfigs.ownerEmail, user.email));
     await db.delete(fixedExpensePayments).where(eq(fixedExpensePayments.ownerEmail, user.email));
     await db.delete(fixedExpenseKeywordSources).where(eq(fixedExpenseKeywordSources.ownerEmail, user.email));
     await db.delete(fixedExpenses).where(eq(fixedExpenses.ownerEmail, user.email));
@@ -1156,7 +1248,15 @@ export async function DELETE(request: Request) {
   await ensureUserSettingsSchema();
   const payload = (await request.json()) as { id: number; kind?: string; replacementId?: number | null };
   if (payload.kind === "fixed-expense") {
+    const children = await getDb().select({ id: fixedExpenses.id }).from(fixedExpenses).where(and(eq(fixedExpenses.ownerEmail, user.email), eq(fixedExpenses.keywordsFromId, Number(payload.id))));
+    for (const child of children) {
+      await getDb().delete(fixedExpenseSkips).where(and(eq(fixedExpenseSkips.ownerEmail, user.email), eq(fixedExpenseSkips.fixedExpenseId, child.id)));
+      await getDb().delete(fixedExpenseMonthAmounts).where(and(eq(fixedExpenseMonthAmounts.ownerEmail, user.email), eq(fixedExpenseMonthAmounts.fixedExpenseId, child.id)));
+      await getDb().delete(fixedExpensePayments).where(and(eq(fixedExpensePayments.ownerEmail, user.email), eq(fixedExpensePayments.fixedExpenseId, child.id)));
+      await getDb().delete(fixedExpenses).where(and(eq(fixedExpenses.ownerEmail, user.email), eq(fixedExpenses.id, child.id)));
+    }
     await getDb().delete(fixedExpenseSkips).where(and(eq(fixedExpenseSkips.ownerEmail, user.email), eq(fixedExpenseSkips.fixedExpenseId, Number(payload.id))));
+    await getDb().delete(fixedExpenseMonthAmounts).where(and(eq(fixedExpenseMonthAmounts.ownerEmail, user.email), eq(fixedExpenseMonthAmounts.fixedExpenseId, Number(payload.id))));
     await getDb().delete(fixedExpensePayments).where(and(eq(fixedExpensePayments.ownerEmail, user.email), eq(fixedExpensePayments.fixedExpenseId, Number(payload.id))));
     await getDb().delete(fixedExpenseKeywordSources).where(and(eq(fixedExpenseKeywordSources.ownerEmail, user.email), eq(fixedExpenseKeywordSources.fixedExpenseId, Number(payload.id))));
     await getDb().delete(fixedExpenses).where(and(eq(fixedExpenses.ownerEmail, user.email), eq(fixedExpenses.id, Number(payload.id))));
@@ -1224,9 +1324,13 @@ export async function DELETE(request: Request) {
       )
       .limit(1);
     if (!own.length) return Response.json({ ok: true });
+    await getDb().delete(energyBills).where(and(eq(energyBills.accountId, accountId), eq(energyBills.ownerEmail, user.email)));
+    await getDb().delete(energyMailConfigs).where(and(eq(energyMailConfigs.accountId, accountId), eq(energyMailConfigs.ownerEmail, user.email)));
     const accountFixedExpenses = await getDb().select({ id: fixedExpenses.id }).from(fixedExpenses).where(and(eq(fixedExpenses.accountId, accountId), eq(fixedExpenses.ownerEmail, user.email)));
     for (const expense of accountFixedExpenses)
       await getDb().delete(fixedExpensePayments).where(and(eq(fixedExpensePayments.ownerEmail, user.email), eq(fixedExpensePayments.fixedExpenseId, expense.id)));
+    for (const expense of accountFixedExpenses)
+      await getDb().delete(fixedExpenseMonthAmounts).where(and(eq(fixedExpenseMonthAmounts.ownerEmail, user.email), eq(fixedExpenseMonthAmounts.fixedExpenseId, expense.id)));
     for (const expense of accountFixedExpenses)
       await getDb().delete(fixedExpenseSkips).where(and(eq(fixedExpenseSkips.ownerEmail, user.email), eq(fixedExpenseSkips.fixedExpenseId, expense.id)));
     for (const expense of accountFixedExpenses)
