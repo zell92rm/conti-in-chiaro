@@ -2114,7 +2114,7 @@ button {
 
 /* Smartphone: tabella movimenti a larghezza schermo, colonne strette e testo a capo */
 @media (max-width: 760px) {
-  .table-panel { max-height: none; max-width: 100%; padding: 6px 4px 8px; overflow-x: hidden; }
+  .table-panel { max-height: 370px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; max-width: 100%; padding: 6px 4px 8px; }
   .table-panel [data-slot="table-container"] { overflow-x: hidden; width: 100%; }
   .table-panel table { width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; font-size: 11px; }
   .table-panel th, .table-panel td, .table-panel th:nth-child(n), .table-panel td:nth-child(n) {
