@@ -1,6 +1,8 @@
 services:
   app:
     build: .
+    # Riparte da solo dopo un riavvio del PC o di Docker (finché non lo fermi con `docker compose stop`/`down`).
+    restart: unless-stopped
     ports:
       - "5173:5173"
       - "80:5173"    # permette di aprire http://localhost anche senza porta

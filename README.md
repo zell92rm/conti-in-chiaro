@@ -187,10 +187,14 @@ La password originale non è recuperabile. Non è ancora presente un flusso self
 ### Esecuzione locale con Docker
 
 ```bash
-docker compose up --build
+docker compose up -d --build   # in background: il terminale si può chiudere
+docker compose logs -f            # per vedere i log (Ctrl+C esce senza fermare nulla)
+docker compose down               # ferma i container (i dati restano nel volume)
 ```
 
-Apri <http://localhost:5173> (o <http://localhost>). Per usare HTTPS autofirmato avvia con `DEV_HTTP=0 docker compose up --build` e apri <https://localhost:5173>. Il codice è copiato nell'immagine: dopo ogni modifica ripeti `docker compose up --build` (senza cache se l'immagine non cambia).
+Con `-d` i container restano attivi anche se chiudi il terminale e, grazie a `restart: unless-stopped`, ripartono dopo un riavvio del PC o di Docker: serve perché la lettura delle email delle bollette gira alle 12:00 e alle 23:30. Senza `-d` i log occupano il terminale e chiuderlo ferma tutto.
+
+Apri <http://localhost:5173> (o <http://localhost>). Per usare HTTPS autofirmato avvia con `DEV_HTTP=0 docker compose up -d --build` e apri <https://localhost:5173>. Il codice è copiato nell'immagine: dopo ogni modifica ripeti `docker compose up --build` (senza cache se l'immagine non cambia).
 
 All'avvio l'entrypoint (`docker/entrypoint.sh`, sempre con fine riga LF grazie a `.gitattributes`):
 - genera, se mancano, la chiave `OPEN_BANKING_ENCRYPTION_KEY` e il token `MAIL_SYNC_TOKEN` (nel volume `data`; sono passabili anche come variabili d'ambiente) e li scrive in `.dev.vars`;
@@ -439,10 +443,14 @@ The original password cannot be recovered. There is currently no self-service re
 ### Running locally with Docker
 
 ```bash
-docker compose up --build
+docker compose up -d --build   # in the background: you can close the terminal
+docker compose logs -f            # follow the logs (Ctrl+C leaves everything running)
+docker compose down               # stop the containers (data stays in the volume)
 ```
 
-Open <http://localhost:5173> (or <http://localhost>). For self-signed HTTPS run `DEV_HTTP=0 docker compose up --build` and open <https://localhost:5173>. The code is copied into the image: after any change run `docker compose up --build` again (without cache if the image does not change).
+With `-d` the containers keep running after you close the terminal and, thanks to `restart: unless-stopped`, come back after a PC or Docker restart: this matters because bill email reading runs at 12:00 and 23:30. Without `-d` the logs occupy the terminal and closing it stops everything.
+
+Open <http://localhost:5173> (or <http://localhost>). For self-signed HTTPS run `DEV_HTTP=0 docker compose up -d --build` and open <https://localhost:5173>. The code is copied into the image: after any change run `docker compose up --build` again (without cache if the image does not change).
 
 On startup the entrypoint (`docker/entrypoint.sh`, always LF line endings thanks to `.gitattributes`):
 - generates, if missing, the `OPEN_BANKING_ENCRYPTION_KEY` key and the `MAIL_SYNC_TOKEN` token (in the `data` volume; both can also be passed as environment variables) and writes them to `.dev.vars`;
