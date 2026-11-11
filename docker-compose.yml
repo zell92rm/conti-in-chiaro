@@ -11,6 +11,8 @@ services:
       DEV_HTTP: "${DEV_HTTP:-1}"
       # Fuso orario del container (la lettura delle email parte alle ore indicate in orario italiano).
       TZ: "Europe/Rome"
+      # Su un server: host/IP/dominio da cui apri il sito, separati da virgola (es. "conti.example.com,192.168.1.20"). "*" = tutti.
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-}"
       # Facoltativo: chiave Base64 di 32 byte (es. `openssl rand -base64 32`). Se vuota ne viene generata una e conservata nel volume.
       OPEN_BANKING_ENCRYPTION_KEY: "${OPEN_BANKING_ENCRYPTION_KEY:-}"
     volumes:

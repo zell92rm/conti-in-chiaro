@@ -40,7 +40,7 @@ export async function claimDueJobs(at = new Date()): Promise<MailJob[]> {
       runRequestedAt: config.runRequestedAt, runningSince: config.runningSince,
     }, at);
     const provider = getEnergyProvider(config.provider);
-    if (!reason || !provider) continue;
+    if (!reason || !provider || !config.encryptedPassword) continue;
     let password: string;
     try { password = await decryptSecret(config.encryptedPassword, config.passwordIv, passwordContext(config.ownerEmail, config.accountId)); }
     catch { await db.update(energyMailConfigs).set({ lastRunAt: at.toISOString(), lastStatus: "error", lastError: "Impossibile decifrare la password salvata: reinseriscila." }).where(eq(energyMailConfigs.id, config.id)); continue; }

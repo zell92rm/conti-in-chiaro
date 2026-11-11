@@ -11,6 +11,8 @@ import {
   fixedExpensePayments,
   fixedExpenseSkips,
   fixedExpenseMonthAmounts,
+  energyBills,
+  energyMailConfigs,
   fixedExpenses,
   keywordBlacklists,
   transactions,
@@ -19,7 +21,8 @@ import {
 import { normalizeKeyword, normalizeKeywords } from "../../../lib/keyword-policy";
 import { getBank } from "../../../lib/banks";
 import { isMonthKey } from "../../../lib/fixed-expense-amount";
-import { isSupply } from "../../../lib/energy-providers";
+import { getEnergyProvider, isGmailAddress, isSupply } from "../../../lib/energy-providers";
+import { normalizeTimes } from "../../../lib/mail-schedule";
 
 const BACKUP_VERSION = 1;
 const now = () => new Date().toISOString();
@@ -49,7 +52,7 @@ export async function GET() {
   await ensureUserSettingsSchema();
   const db = getDb();
   const owner = user.email;
-  const [accountRows, transactionRows, categoryRows, keywordRows, expenseRows, sourceRows, paymentRows, skipRows, budgetRows, goalRows, blacklistRows, settingsRows, monthAmountRows] = await Promise.all([
+  const [accountRows, transactionRows, categoryRows, keywordRows, expenseRows, sourceRows, paymentRows, skipRows, budgetRows, goalRows, blacklistRows, settingsRows, monthAmountRows, billRows, mailConfigRows] = await Promise.all([
     db.select().from(accounts).where(eq(accounts.ownerEmail, owner)),
     db.select().from(transactions).where(eq(transactions.ownerEmail, owner)),
     db.select().from(categories).where(eq(categories.ownerEmail, owner)),
@@ -63,6 +66,8 @@ export async function GET() {
     db.select().from(keywordBlacklists).where(eq(keywordBlacklists.ownerEmail, owner)),
     db.select().from(userSettings).where(eq(userSettings.ownerEmail, owner)).limit(1),
     db.select().from(fixedExpenseMonthAmounts).where(eq(fixedExpenseMonthAmounts.ownerEmail, owner)),
+    db.select().from(energyBills).where(eq(energyBills.ownerEmail, owner)),
+    db.select().from(energyMailConfigs).where(eq(energyMailConfigs.ownerEmail, owner)),
   ]);
   const payload = {
     app: "conti-in-chiaro",
@@ -84,6 +89,9 @@ export async function GET() {
     fixedExpensePayments: paymentRows.map(({ ownerEmail: _o, ...row }) => row),
     fixedExpenseSkips: skipRows.map(({ ownerEmail: _o, ...row }) => row),
     fixedExpenseMonthAmounts: monthAmountRows.map(({ ownerEmail: _o, id: _i, ...row }) => row),
+    // Bollette lette dalle email e configurazione della lettura: la password per le app NON viene esportata (va reinserita).
+    energyBills: billRows.map(({ ownerEmail: _o, ...row }) => row),
+    energyMailConfigs: mailConfigRows.map((row) => ({ accountId: row.accountId, provider: row.provider, email: row.imapUser, times: normalizeTimes(row.times), enabled: row.enabled })),
     budgets: budgetRows.map(({ ownerEmail: _o, id: _i, ...row }) => row),
     keywordBlacklists: blacklistRows.map(({ ownerEmail: _o, id: _i, ...row }) => row),
   };
@@ -108,7 +116,7 @@ export async function POST(request: Request) {
 
   const db = getDb();
   const owner = user.email;
-  const stats = { accounts: 0, transactions: 0, duplicateTransactions: 0, categories: 0, fixedExpenses: 0 };
+  const stats = { accounts: 0, transactions: 0, duplicateTransactions: 0, categories: 0, fixedExpenses: 0, energyBills: 0, mailConfigs: 0 };
 
   // --- Conti: riusa quelli con stesso nome e tipo, crea gli altri
   const existingAccounts = await db.select().from(accounts).where(eq(accounts.ownerEmail, owner));
@@ -240,6 +248,32 @@ export async function POST(request: Request) {
     return fixedExpenseId && isMonthKey(item?.month) && amount !== null ? [{ ownerEmail: owner, fixedExpenseId, month: item.month as string, amount, createdAt: str(item.createdAt, now()) }] : [];
   });
   await runBatches(db, chunk(monthAmountValues, 15).map((values) => db.insert(fixedExpenseMonthAmounts).values(values).onConflictDoNothing()));
+
+  // --- Bollette lette dalle email (si scartano quelle già presenti con lo stesso identificativo)
+  const billValues = asArray(data.energyBills).flatMap((item) => {
+    const accountId = accountMap.get(Number(item?.accountId)), emailId = str(item?.emailId), subject = str(item?.subject);
+    if (!accountId || !emailId || !subject || !isSupply(item?.supply) || !getEnergyProvider(item?.provider)) return [];
+    const appliedExpenseId = expenseMap.get(Number(item?.appliedExpenseId));
+    const applied = Boolean(appliedExpenseId) && isMonthKey(item?.appliedMonth) && optStr(item?.appliedAt);
+    return [{
+      ownerEmail: owner, accountId, provider: str(item.provider), emailId, receivedAt: str(item.receivedAt, now()), supply: item.supply as string,
+      consumption: num(item.consumption), consumptionUnit: optStr(item.consumptionUnit), total: num(item.total),
+      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(str(item.dueDate)) ? str(item.dueDate) : null, periodLabel: optStr(item.periodLabel), subject: subject.slice(0, 300),
+      appliedAt: applied ? optStr(item.appliedAt) : null, appliedExpenseId: applied ? appliedExpenseId : null, appliedMonth: applied ? str(item.appliedMonth) : null,
+      note: optStr(item.note), createdAt: str(item.createdAt, now()),
+    }];
+  });
+  const billResults = await runBatches<{ id: number }>(db, chunk(billValues, 5).map((values) => db.insert(energyBills).values(values).onConflictDoNothing().returning({ id: energyBills.id })), 20);
+  stats.energyBills = billResults.reduce((sum, rows) => sum + rows.length, 0);
+
+  // --- Configurazione lettura email: senza password. Resta disattivata finché non la reinserisci dalle impostazioni del conto.
+  const existingConfigs = await db.select({ accountId: energyMailConfigs.accountId }).from(energyMailConfigs).where(eq(energyMailConfigs.ownerEmail, owner));
+  for (const item of asArray(data.energyMailConfigs)) {
+    const accountId = accountMap.get(Number(item?.accountId)), email = str(item?.email).trim().toLowerCase();
+    if (!accountId || !getEnergyProvider(item?.provider) || !isGmailAddress(email) || existingConfigs.some((config) => config.accountId === accountId)) continue;
+    await db.insert(energyMailConfigs).values({ ownerEmail: owner, accountId, provider: str(item.provider), imapUser: email, encryptedPassword: "", passwordIv: "", times: JSON.stringify(normalizeTimes(item.times)), enabled: false, createdAt: now(), updatedAt: now() }).onConflictDoNothing();
+    stats.mailConfigs++;
+  }
 
   return Response.json({ ok: true, ...stats });
 }

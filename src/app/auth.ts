@@ -96,6 +96,12 @@ export async function deleteCurrentSession(): Promise<void> {
   if (token) await getDb().delete(sessions).where(eq(sessions.id, await sha256(token)));
 }
 
+/** Vero se la richiesta è arrivata in HTTPS, anche tramite un proxy che termina il TLS (X-Forwarded-Proto). */
+export function isSecureRequest(request: Request): boolean {
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+  return forwarded ? forwarded === "https" : new URL(request.url).protocol === "https:";
+}
+
 export function sessionCookie(token: string, secure = true): string {
   return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
 }

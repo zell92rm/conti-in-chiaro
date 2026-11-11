@@ -35,7 +35,7 @@ L'applicazione è pensata per un'installazione personale con un solo utente: il 
 - **Lettura automatica delle email** del fornitore di energia (Octopus Energy, via Gmail) che aggiorna da sola gli importi previsti (vedi [Lettura delle email](#lettura-automatica-delle-email-delle-bollette)).
 - Navigazione dei periodi che salta quelli senza movimenti nei conti Spese mese e Risparmi.
 - Scheda "Movimenti per categoria" con il totale di uscite o entrate, nelle viste Personale e Spese mese.
-- Esportazione e importazione dei dati (backup JSON) che conserva movimenti identici nello stesso file, importi per periodo, bollette extra e fornitura.
+- Esportazione e importazione dei dati (backup JSON) che conserva movimenti identici nello stesso file e include bollette luce/gas (importi per periodo, bollette extra, fornitura), bollette lette dalle email e configurazione della lettura email (senza la password per le app).
 - Interfaccia ottimizzata per desktop e dispositivi mobili: sui conti Personale grafico dell'andamento e movimenti per categoria sono affiancati; su smartphone la tabella dei movimenti sta nella larghezza dello schermo e il testo va a capo.
 - Interfaccia multilingua in italiano e inglese, selezionabile dalla pagina Configurazione e memorizzata nel browser.
 
@@ -166,6 +166,8 @@ Nelle impostazioni di un conto Personale o Spese mese la sezione **Lettura email
 - Applica solo le bollette la cui **scadenza cade nel periodo attuale** del conto (periodo contabile, non mese solare): scrive il totale nell'importo del periodo della bolletta con la stessa fornitura. Dalla seconda bolletta della stessa fornitura nello stesso periodo usa la bolletta extra. Le altre restano salvate e si applicano quando il loro periodo diventa quello attuale.
 - Se non esiste una bolletta variabile con quella fornitura, l'email resta salvata con una nota e non cambia nulla.
 
+**Backup**: l'esportazione include le bollette lette (`energy_bills`) e la configurazione (fornitore, email, orari, stato), ma **non la password per le app**. All'importazione le bollette già presenti (stesso identificativo email) vengono saltate, i collegamenti alle spese vengono rimappati e la configurazione arriva **disattivata e senza password**: reinseriscila nelle impostazioni del conto e salva. La prima lettura dopo il ripristino legge di nuovo tutta la casella.
+
 **Architettura**: la lettura IMAP la fa `scripts/mail-sync-worker.mjs`, un processo Node avviato dall'entrypoint Docker accanto al server dell'app. Ogni 30 secondi chiede a `/api/internal/mail-sync/due` quali configurazioni sono da eseguire, legge la casella e invia le email a `/api/internal/mail-sync/result`, che le interpreta (`src/lib/octopus-bill.ts`), le salva e applica gli importi (`src/lib/mail-sync.ts`). Gli endpoint interni accettano solo il token `MAIL_SYNC_TOKEN`, generato dall'entrypoint nel volume dati.
 
 > La lettura automatica funziona nell'esecuzione **Docker**. Con Cloudflare Workers la sezione di configurazione è disponibile ma non c'è uno scheduler né la lettura IMAP.
@@ -202,6 +204,8 @@ All'avvio l'entrypoint (`docker/entrypoint.sh`, sempre con fine riga LF grazie a
 - avvia il worker di lettura email e poi il server.
 
 `TZ=Europe/Rome` è impostato nel compose per gli orari della lettura email. `docker compose down -v` cancella anche il database locale.
+
+**Su un server**: per aprire il sito da un indirizzo diverso da `localhost` indica host, IP o dominio in `ALLOWED_HOSTS` (separati da virgola), per esempio `ALLOWED_HOSTS="conti.example.com,192.168.1.20" docker compose up -d --build` (oppure in un file `.env` accanto al compose). Senza, Vite risponde "Blocked request. This host is not allowed". `ALLOWED_HOSTS="*"` accetta qualsiasi host ed è meno sicuro. Il sito parte in HTTP sulle porte 5173 e 80: per esporlo su Internet mettilo dietro un reverse proxy HTTPS (Caddy, nginx, Traefik) che inoltri `X-Forwarded-Proto` e `X-Forwarded-Host`; il cookie di sessione diventa così `Secure`. Non esporre la porta direttamente senza HTTPS.
 
 ### Deploy Cloudflare
 
@@ -291,7 +295,7 @@ It is designed as a personal, single-user installation. The first registered acc
 - **Automatic email reading** for the energy supplier (Octopus Energy, via Gmail) that updates expected amounts on its own (see [Email reading](#automatic-bill-email-reading)).
 - Period navigation that skips periods without transactions in Monthly-expenses and Savings accounts.
 - A "Transactions by category" card showing the expense or income total in the Personal and Monthly-expenses views.
-- Data export/import (JSON backup) that keeps identical transactions inside the same file, per-period amounts, extra bills, and supply.
+- Data export/import (JSON backup) that keeps identical transactions inside the same file and includes electricity/gas bills (per-period amounts, extra bills, supply), bills read from email, and the email-reading configuration (without the app password).
 - Desktop and mobile-optimized interface: on Personal accounts the trend chart and the category card sit side by side; on smartphones the transactions table fits the screen width and text wraps.
 - Multilingual Italian and English interface, selectable from Configuration and persisted in the browser.
 
@@ -422,6 +426,8 @@ In a Personal or Monthly-expenses account's settings, the **Bill email reading**
 - It applies only bills whose **due date falls in the account's current period** (accounting period, not calendar month): the total is written to that period's amount of the bill with the same supply. From the second bill of the same supply in the same period it uses the extra bill. Others stay stored and are applied when their period becomes current.
 - If no variable bill has that supply, the email is kept with a note and nothing changes.
 
+**Backup**: the export includes the bills read (`energy_bills`) and the configuration (supplier, email, times, state) but **not the app password**. On import, bills already present (same email identifier) are skipped, links to expenses are remapped, and the configuration arrives **disabled and without a password**: re-enter it in the account settings and save. The first read after a restore reads the whole mailbox again.
+
 **Architecture**: IMAP reading is done by `scripts/mail-sync-worker.mjs`, a Node process started by the Docker entrypoint next to the app server. Every 30 seconds it asks `/api/internal/mail-sync/due` which configurations should run, reads the mailbox, and posts the emails to `/api/internal/mail-sync/result`, which parses them (`src/lib/octopus-bill.ts`), stores them, and applies the amounts (`src/lib/mail-sync.ts`). The internal endpoints accept only the `MAIL_SYNC_TOKEN` token, generated by the entrypoint in the data volume.
 
 > Automatic reading works in the **Docker** setup. On Cloudflare Workers the configuration section is available but there is no scheduler or IMAP reading.
@@ -458,6 +464,8 @@ On startup the entrypoint (`docker/entrypoint.sh`, always LF line endings thanks
 - starts the email-reading worker and then the server.
 
 `TZ=Europe/Rome` is set in the compose file for the email-reading schedule. `docker compose down -v` also deletes the local database.
+
+**On a server**: to open the site from an address other than `localhost`, list the host, IP, or domain in `ALLOWED_HOSTS` (comma-separated), for example `ALLOWED_HOSTS="conti.example.com,192.168.1.20" docker compose up -d --build` (or in a `.env` file next to the compose file). Without it, Vite answers "Blocked request. This host is not allowed". `ALLOWED_HOSTS="*"` accepts any host and is less safe. The site starts over HTTP on ports 5173 and 80: to expose it on the Internet put it behind an HTTPS reverse proxy (Caddy, nginx, Traefik) that forwards `X-Forwarded-Proto` and `X-Forwarded-Host`; the session cookie then becomes `Secure`. Do not expose the port directly without HTTPS.
 
 ### Cloudflare deployment
 

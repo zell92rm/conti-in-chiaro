@@ -1,4 +1,4 @@
-import { authenticate, assertSameOrigin, createSession, safeReturnTo, sessionCookie } from "../../../auth";
+import { authenticate, assertSameOrigin, createSession, isSecureRequest, safeReturnTo, sessionCookie } from "../../../auth";
 
 export async function POST(request: Request) {
   try {
@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     if (!user) return redirectWithError(request, "/login", "Email o password non corretti.", returnTo);
     return new Response(null, { status: 303, headers: {
       Location: new URL(returnTo, request.url).toString(),
-      "Set-Cookie": sessionCookie(await createSession(user.id), new URL(request.url).protocol === "https:"),
+      "Set-Cookie": sessionCookie(await createSession(user.id), isSecureRequest(request)),
     } });
   } catch (error) {
     return redirectWithError(request, "/login", error instanceof Error ? error.message : "Accesso non riuscito.", "/");

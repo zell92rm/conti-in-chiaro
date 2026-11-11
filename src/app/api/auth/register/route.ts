@@ -1,4 +1,4 @@
-import { assertSameOrigin, createSession, hasRegisteredUser, registerFirstUser, sessionCookie } from "../../../auth";
+import { assertSameOrigin, createSession, hasRegisteredUser, isSecureRequest, registerFirstUser, sessionCookie } from "../../../auth";
 
 export async function POST(request: Request) {
   try {
@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     const user = await registerFirstUser({ displayName: String(form.get("display_name") || ""), email: String(form.get("email") || ""), password });
     return new Response(null, { status: 303, headers: {
       Location: new URL("/", request.url).toString(),
-      "Set-Cookie": sessionCookie(await createSession(user.id), new URL(request.url).protocol === "https:"),
+      "Set-Cookie": sessionCookie(await createSession(user.id), isSecureRequest(request)),
     } });
   } catch (error) {
     const url = new URL("/register", request.url); url.searchParams.set("error", error instanceof Error ? error.message : "Registrazione non riuscita.");

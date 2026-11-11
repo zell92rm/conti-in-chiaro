@@ -2183,3 +2183,20 @@ button {
   .energy-bill-row small, .energy-bill-row span:not(.tag), .energy-bill-row em { grid-column: 1 / -1; }
   .switch-row { min-height: 56px; }
 }
+
+
+/* Bollette lette: una pagina per periodo contabile del conto */
+.energy-bills-list.loading { opacity: .55; transition: opacity .15s; }
+.energy-bills-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.energy-bills-page-select { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.energy-bills-page-select select { min-height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font: inherit; }
+@media (max-width: 760px) {
+  .energy-bills-pager { gap: 6px; }
+  .energy-bills-pager button { min-height: 44px; }
+  .energy-bills-pager button span { display: none; }
+  .energy-bills-page-select select { min-height: 44px; }
+}
+
+.energy-bills-range { font-size: 12px; color: var(--muted); }
+.energy-bills-page-select select { min-width: 160px; }
+.energy-bills-list { display: grid; gap: 6px; }

@@ -48,7 +48,10 @@ export default defineConfig(async () => {
       host: "0.0.0.0",
       port: 5173,
       strictPort: true,
-      allowedHosts: ["localhost", "127.0.0.1"],
+      // Su un server aggiungi host/IP/dominio in ALLOWED_HOSTS (separati da virgola); "*" li accetta tutti (meno sicuro).
+      allowedHosts: (process.env.ALLOWED_HOSTS?.trim() === "*"
+        ? true
+        : ["localhost", "127.0.0.1", ...(process.env.ALLOWED_HOSTS || "").split(",").map((host) => host.trim()).filter(Boolean)]) as true | string[],
     },
     plugins: [
       // HTTPS autofirmato in sviluppo; con DEV_HTTP=1 (usato da Docker) il server risponde in HTTP semplice.
